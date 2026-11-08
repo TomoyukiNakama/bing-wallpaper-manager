@@ -59,6 +59,16 @@ Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用�
 - GNOME デスクトップの Ubuntu（Ubuntu 26.04 で開発。Wayland と X11 のどちらでも動きます）。壁紙は GNOME の `gsettings` で設定します
 - Vulkan に対応したグラフィックスドライバー（通常の Ubuntu デスクトップには入っています）
 
+### ビルド済みのパッケージ（x86_64）
+
+各[リリース](https://github.com/TomoyukiNakama/bing-wallpaper-manager/releases/latest)に、Ubuntu 26.04 以降（glibc 2.43 以降）向けのビルド済みパッケージがあります。`bing-wallpaper-manager-<バージョン>-x86_64-linux.tar.gz` をダウンロードして、`~/.local` に展開します。
+
+```sh
+tar -xzf bing-wallpaper-manager-*-x86_64-linux.tar.gz -C ~/.local --strip-components=1
+```
+
+ソースからビルドする場合は、次の手順に進んでください。
+
 ### 1. ビルドに必要なパッケージを入れる
 
 ```sh
@@ -196,6 +206,10 @@ BWM_THEME=dark BWM_LANG=de scripts/screenshot.sh target/dark.png 10 1280x1300
 ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
   scripts/screenshot.sh target/step2.png 10 1280x1000
 ```
+
+### リリース用のパッケージ
+
+`scripts/package-release.sh` がリリース版をビルドし、アプリ本体・アイコン・デスクトップ項目・ライセンス類（使用ライブラリのライセンス本文を含む）を入れた `target/dist/bing-wallpaper-manager-<バージョン>-x86_64-linux.tar.gz` と `.sha256` を作ります。バージョンは `Cargo.toml` から取ります。
 
 ### 翻訳
 

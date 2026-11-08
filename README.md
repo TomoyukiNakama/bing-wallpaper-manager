@@ -59,6 +59,16 @@ Thanks to both projects. All other libraries are listed in [THIRD_PARTY_LICENSES
 - Ubuntu with the GNOME desktop (developed on Ubuntu 26.04; Wayland and X11). The wallpaper is set through GNOME’s `gsettings`
 - A graphics driver with Vulkan support (included in a normal Ubuntu desktop install)
 
+### Prebuilt binary (x86_64)
+
+Each [release](https://github.com/TomoyukiNakama/bing-wallpaper-manager/releases/latest) has a prebuilt package for Ubuntu 26.04 or newer (glibc 2.43+). Download `bing-wallpaper-manager-<version>-x86_64-linux.tar.gz` and extract it into `~/.local`:
+
+```sh
+tar -xzf bing-wallpaper-manager-*-x86_64-linux.tar.gz -C ~/.local --strip-components=1
+```
+
+To build from source instead, follow the steps below.
+
 ### 1. Install the build tools
 
 ```sh
@@ -196,6 +206,10 @@ Put clicks, right-clicks, scrolling, keys and typing in `ACTIONS` to interact be
 ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
   scripts/screenshot.sh target/step2.png 10 1280x1000
 ```
+
+### Release packages
+
+`scripts/package-release.sh` builds the release version and creates `target/dist/bing-wallpaper-manager-<version>-x86_64-linux.tar.gz` (and its `.sha256`) with the binary, icons, desktop entry and license files, including the license texts of all bundled libraries. The version comes from `Cargo.toml`.
 
 ### Translations
 

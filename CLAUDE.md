@@ -76,3 +76,12 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   ウィンドウの app_id と `.desktop` のファイル名（`bing-wallpaper-manager`）は一致させる（GNOME がアイコンを結び付ける）。
 - 検索（`src/search.rs`）は保存済みの写真のメタデータだけを対象にする。解説文は最初の検索時にアーカイブから補い、
   色の割合（`src/colors.rs`）は取得・読み込みのあとにサムネイルから裏で解析する。
+
+## リリースの手順
+
+1. `Cargo.toml` の version を上げる（「このアプリについて」に出る）。
+2. `scripts/package-release.sh` で `target/dist/` にパッケージと `.sha256` を作る（使用ライブラリのライセンス本文も同梱される）。
+3. パッケージを一時フォルダに展開し、`BIN=<展開先>/bin/bing-wallpaper-manager scripts/screenshot.sh ...` で起動を確認する。
+4. コミット・push してから `gh release create v<version> --target main --notes-file ... <tar.gz> <tar.gz.sha256>`。
+   リリースノートは英語で書き、日本語の説明も付ける。v0.1.0 との差分は `git fetch --tags` してから `git log v<前>..HEAD`。
+5. 公開された URL からダウンロードし、`sha256sum -c` が通ることを確かめる（作成直後は 504 になることがある）。
