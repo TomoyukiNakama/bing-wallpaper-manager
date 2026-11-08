@@ -70,7 +70,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。
 - README は英語版（`README.md`、GitHub の既定）と日本語版（`README.ja.md`）の 2 つ。機能を変えたら両方を同じ内容に更新する。
-  説明用の画像は `docs/` にあり、英語版は英語表示、日本語版は日本語表示（`*.ja.png`）で撮る（`BWM_LANG`、ダークテーマ）。
+  説明用の画像は `docs/` にあり、英語版は英語表示、日本語版は日本語表示（`*.ja.jpg`）で撮る（`BWM_LANG`、ダークテーマ）。
+  サイズを抑えるため、撮った PNG は品質 85 の JPEG にして置く。
 - アイコンは `assets/icons/bing-wallpaper-manager.svg` が元。変えたら `python3 scripts/render-icon.py` で PNG を作り直す。
   ウィンドウの app_id と `.desktop` のファイル名（`bing-wallpaper-manager`）は一致させる（GNOME がアイコンを結び付ける）。
 - 検索（`src/search.rs`）は保存済みの写真のメタデータだけを対象にする。解説文は最初の検索時にアーカイブから補い、

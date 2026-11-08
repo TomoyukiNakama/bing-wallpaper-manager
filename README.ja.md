@@ -6,7 +6,7 @@
 
 Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用のデスクトップアプリです。Rust と [GPUI](https://gpui.rs)、[gpui-kit](https://gpui-kit.com) で作っています。
 
-![Bing Wallpaper Manager のダッシュボード（英語表示・ダークテーマ）](docs/screenshot.png)
+![Bing Wallpaper Manager のダッシュボード（英語表示・ダークテーマ）](docs/screenshot.jpg)
 
 ## 機能
 
@@ -34,13 +34,13 @@ Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用�
 
 題名・撮影地・解説文・配信地域・日付（`2026-11-08` など）に含まれる言葉で探します。写真の見出しと解説文は配信されたすべての言語で保存しているので、言語をまたいで見つかります。下の画像は、日本語表示のまま英語の `autumn` で探した例です。日本の題名「秋色の森を水上散歩」などの写真が見つかっています。
 
-![「autumn」で探した例](docs/search-words.ja.png)
+![「autumn」で探した例](docs/search-words.ja.jpg)
 
 ### 色で探す
 
 赤・橙・黄・緑・水色・青・紫・ピンク・白・黒の 10 色から選ぶと、その色を多く含む写真から順に並びます。色の割合は、各写真のサムネイルから裏で計算しています。言葉と組み合わせて「mountain ＋ 青」のように探すこともできます。
 
-![青を多く含む写真](docs/search-color.ja.png)
+![青を多く含む写真](docs/search-color.ja.jpg)
 
 ## 使用している技術
 

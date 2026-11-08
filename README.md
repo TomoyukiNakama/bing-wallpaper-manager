@@ -6,7 +6,7 @@
 
 A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them as your GNOME wallpaper. Built with Rust, [GPUI](https://gpui.rs) and [gpui-kit](https://gpui-kit.com).
 
-![Bing Wallpaper Manager dashboard (English, dark theme)](docs/screenshot.png)
+![Bing Wallpaper Manager dashboard (English, dark theme)](docs/screenshot.jpg)
 
 ## Features
 
@@ -34,13 +34,13 @@ Press **Ctrl+F** (or click the search box in the title bar) to search the photos
 
 Type any word from a photo’s title, place, description, region or date (such as `2026-11-08`). Titles and descriptions are saved in every language the photo was shown in, and the longer descriptions from the community archive are searched too, so a word in one language also finds photos shown in other regions.
 
-![Searching for “autumn”](docs/search-words.png)
+![Searching for “autumn”](docs/search-words.jpg)
 
 ### By color
 
 Pick one of ten colors (red, orange, yellow, green, cyan, blue, purple, pink, white, black) to list the photos that contain the most of that color first. The color shares are computed from each photo’s thumbnail in the background. Words and a color can be combined, for example “mountain” + blue.
 
-![Photos with a lot of blue](docs/search-color.png)
+![Photos with a lot of blue](docs/search-color.jpg)
 
 ## Built with
 
