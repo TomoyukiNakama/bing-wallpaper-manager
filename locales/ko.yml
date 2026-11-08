@@ -57,6 +57,7 @@ footer.keys: "← → 사진 선택   Enter 배경화면으로 설정   Ctrl+F �
 hero.current: "현재 배경화면"
 hero.failed: "사진을 가져오지 못했습니다. 네트워크를 확인하고 새로 고치세요."
 hero.loading: "사진을 가져오는 중…"
+hero.loading_image: "사진 불러오는 중…"
 hero.shown_all: "%{count}개 지역 모두에 표시"
 hero.shown_in: "표시 지역: %{regions}"
 language.auto: "자동 (OS 따름)"

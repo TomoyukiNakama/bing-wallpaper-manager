@@ -57,6 +57,7 @@ footer.keys: "← → で写真を選ぶ　Enter で壁紙にする　Ctrl+F で
 hero.current: "壁紙に設定中"
 hero.failed: "写真を取得できませんでした。ネットワークを確認して更新してください。"
 hero.loading: "写真を取得しています…"
+hero.loading_image: "写真を読み込んでいます…"
 hero.shown_all: "全 %{count} 地域で配信"
 hero.shown_in: "%{regions}で配信"
 language.auto: "自動（OS に合わせる）"

@@ -16,6 +16,7 @@ mod wallpaper;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -68,6 +69,11 @@ const OLDER_DAYS: usize = 30;
 const CHROME_HEIGHT: Pixels = px(64.);
 /// 大きな写真を固定しても、一覧に必ず残す高さ。
 const LIST_MIN_HEIGHT: Pixels = px(260.);
+/// 一覧をスクロールしたときの、大きな写真の細い帯の高さ。
+const HERO_COLLAPSED_HEIGHT: f32 = 140.;
+/// 大きな写真の切り替え（クロスフェード）と、高さの変化にかける時間。
+const HERO_FADE: Duration = Duration::from_millis(600);
+const HERO_RESIZE: Duration = Duration::from_millis(300);
 
 enum LatestState {
     Loading,
@@ -146,6 +152,16 @@ struct Dashboard {
     indexing: bool,
     /// 色の解析中
     analyzing_colors: bool,
+    /// 大きく表示している写真（キーと画像）。選んだ写真の画像の読み込みが終わるまで、前の写真を出し続ける
+    hero_front: Option<(String, Option<PathBuf>)>,
+    /// 切り替えのときに下に残す、前の写真の画像（クロスフェード用）
+    hero_back: Option<PathBuf>,
+    /// 切り替えのたびに増やす（フェードのアニメーションをやり直すため）
+    hero_swap: usize,
+    /// 一覧をスクロールして大きな写真を細い帯にしているか
+    hero_collapsed: bool,
+    /// 高さのアニメーション（開始の高さ, 終了の高さ, 識別番号）
+    hero_height: (f32, f32, usize),
     _appearance: Subscription,
     _search_events: Subscription,
 }
@@ -225,6 +241,11 @@ impl Dashboard {
             descriptions_ready: false,
             indexing: false,
             analyzing_colors: false,
+            hero_front: None,
+            hero_back: None,
+            hero_swap: 0,
+            hero_collapsed: false,
+            hero_height: (0., 0., 0),
             _appearance: appearance,
             _search_events: search_events,
         };
@@ -289,6 +310,10 @@ impl Dashboard {
             .clone()
             .or_else(|| today.first().map(|p| p.key.clone()))
             .or_else(|| self.stored.first().map(|s| s.key.clone()))?;
+        self.hero_for(key, today)
+    }
+
+    fn hero_for(&self, key: String, today: &[TodayPhoto]) -> Option<Hero> {
         let stored = self.find_stored(&key);
         let image = stored
             .and_then(|s| self.library.display_path(s))
@@ -680,8 +705,39 @@ impl Dashboard {
     }
 
     fn select(&mut self, key: String, cx: &mut Context<Self>) {
-        self.selected = Some(key);
+        self.selected = Some(key.clone());
+        if self.hero_collapsed {
+            self.hero_collapsed = false;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(HERO_RESIZE + Duration::from_millis(50)).await;
+                this.update(cx, |this, cx| {
+                    this.ensure_visible(&key);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         cx.notify();
+    }
+
+    /// 一覧のスクロール位置に合わせて、大きな写真を細い帯にする（一番上に戻ったら広げる）。
+    fn on_list_scrolled(&mut self, cx: &mut Context<Self>) {
+        let collapse = self.list_scroll.offset().y < px(-24.);
+        if collapse != self.hero_collapsed {
+            self.hero_collapsed = collapse;
+            cx.notify();
+        }
+    }
+
+    /// 広げたときの大きな写真の高さ（一覧の領域 LIST_MIN_HEIGHT を必ず残す）。
+    fn hero_full_height(window: &Window) -> f32 {
+        let viewport = window.viewport_size().height;
+        f32::from(
+            (viewport * 0.5)
+                .min(viewport - CHROME_HEIGHT - LIST_MIN_HEIGHT)
+                .clamp(px(200.), px(600.)),
+        )
     }
 
     /// 今の壁紙が、このアプリの保存先の写真かどうか。
@@ -1077,18 +1133,25 @@ impl Dashboard {
     }
 
     /// 選んだ写真を全幅で表示する。この画面で唯一の大きな要素。
-    fn render_hero(&self, hero: Option<Hero>, p: Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 上部に固定するので、一覧の領域（LIST_MIN_HEIGHT）を必ず残す高さにする
-        let viewport = window.viewport_size().height;
-        let height = (viewport * 0.5)
-            .min(viewport - CHROME_HEIGHT - LIST_MIN_HEIGHT)
-            .clamp(px(200.), px(600.));
-        let compact = height < px(380.);
-        let frame = div().relative().w_full().h(height).flex_none().overflow_hidden().bg(p.surface);
+    /// `hero` は今表示している写真、`loading` は選んだ別の写真の画像を読み込み中かどうか。
+    fn render_hero(&self, hero: Option<Hero>, loading: bool, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        let (from, to, anim) = self.hero_height;
+        let collapsed = self.hero_collapsed;
+        let compact = to < 380.;
+        let frame = div().relative().w_full().flex_none().overflow_hidden().bg(p.surface);
+        // 高さは「開始 → 終了」をアニメーションで変える（スクロールで細く、写真を選ぶと広く）
+        let with_height = move |el: Div| {
+            el.with_animation(
+                ("hero-height", anim),
+                Animation::new(HERO_RESIZE).with_easing(ease_in_out),
+                move |el, t| el.h(px(from + (to - from) * t)),
+            )
+            .into_any_element()
+        };
 
         let Some(hero) = hero else {
             let failed = !self.refreshing;
-            return frame.child(
+            return with_height(frame.child(
                 v_flex()
                     .size_full()
                     .items_center()
@@ -1101,16 +1164,28 @@ impl Dashboard {
                     .when(failed, |el| {
                         el.child(tr!("hero.failed"))
                     }),
-            );
+            ));
         };
 
+        // 前の写真を下に残し、新しい写真をゆっくり重ねる（読み込みが終わってから切り替えるので、画面が消えない）
+        let back = self
+            .hero_back
+            .clone()
+            .filter(|b| Some(b) != hero.image.as_ref())
+            .map(|path| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(img(path).size_full().object_fit(ObjectFit::Cover))
+            });
         let image = match &hero.image {
             Some(path) => div()
-                .size_full()
+                .absolute()
+                .inset_0()
                 .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover))
                 .with_animation(
-                    SharedString::from(format!("hero-{}", hero.key)),
-                    Animation::new(Duration::from_millis(260)).with_easing(ease_out_quint()),
+                    ("hero-fade", self.hero_swap),
+                    Animation::new(HERO_FADE).with_easing(ease_in_out),
                     |el, t| el.opacity(t),
                 )
                 .into_any_element(),
@@ -1122,6 +1197,22 @@ impl Dashboard {
                 .child(Spinner::new().large())
                 .into_any_element(),
         };
+        // 選んだ写真を読み込んでいる間の表示
+        let loading_badge = loading.then(|| {
+            h_flex()
+                .absolute()
+                .top_3()
+                .right_4()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .rounded_full()
+                .bg(black().opacity(0.55))
+                .text_xs()
+                .text_color(white())
+                .child(Spinner::new().xsmall().color(white()))
+                .child(tr!("hero.loading_image"))
+        });
 
         let key = hero.key.clone();
         let menu_button = {
@@ -1174,15 +1265,15 @@ impl Dashboard {
                 .into_any_element()
         };
 
-        frame.child(image).child(
+        with_height(frame.children(back).child(image).children(loading_badge).child(
             h_flex()
                 .absolute()
                 .left_0()
                 .right_0()
                 .bottom_0()
                 .px_8()
-                .pt(px(if compact { 56. } else { 120. }))
-                .pb(px(if compact { 18. } else { 28. }))
+                .pt(px(if collapsed { 28. } else if compact { 56. } else { 120. }))
+                .pb(px(if collapsed { 16. } else if compact { 18. } else { 28. }))
                 .gap_6()
                 .items_end()
                 .bg(linear_gradient(
@@ -1198,12 +1289,13 @@ impl Dashboard {
                         .text_color(white())
                         .child(
                             div()
-                                .text_size(px(if compact { 26. } else { 34. }))
-                                .line_height(px(if compact { 34. } else { 44. }))
+                                .text_size(px(if collapsed { 22. } else if compact { 26. } else { 34. }))
+                                .line_height(px(if collapsed { 30. } else if compact { 34. } else { 44. }))
                                 .font_weight(FontWeight::LIGHT)
+                                .truncate()
                                 .child(hero.title),
                         )
-                        .child(
+                        .when(!collapsed, |el| el.child(
                             div()
                                 .max_w(px(720.))
                                 .text_sm()
@@ -1221,10 +1313,10 @@ impl Dashboard {
                                     bing::date_text(&hero.startdate, true),
                                     hero.markets
                                 )),
-                        ),
+                        )),
                 )
                 .child(h_flex().flex_none().gap_2().child(menu_button).child(button)),
-        )
+        ))
     }
 
     /// 枠のない写真タイル。選択中は湖の色の輪郭で示す。
@@ -1645,8 +1737,38 @@ impl Render for Dashboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::current(window);
         let today = self.today_photos();
-        let hero = self.hero(&today);
-        self.shown = hero.as_ref().map(|h| h.key.clone());
+        let target = self.hero(&today);
+        // 選択の印（タイルの輪郭）はすぐ動かす
+        self.shown = target.as_ref().map(|h| h.key.clone());
+        // 大きな写真は、選んだ写真の画像の読み込みが終わってから切り替える
+        let target_id = target.as_ref().map(|h| (h.key.clone(), h.image.clone()));
+        let target_ready = target
+            .as_ref()
+            .and_then(|h| h.image.as_ref())
+            .is_none_or(|path| {
+                window
+                    .use_asset::<ImgResourceLoader>(&Resource::Path(Arc::from(path.as_path())), cx)
+                    .is_some()
+            });
+        if target_id != self.hero_front && target_ready {
+            self.hero_back = self.hero_front.as_ref().and_then(|(_, path)| path.clone());
+            self.hero_front = target_id.clone();
+            self.hero_swap += 1;
+        }
+        let loading = target_id != self.hero_front;
+        let hero = self.hero_front.clone().and_then(|(key, path)| {
+            self.hero_for(key, &today).map(|mut h| {
+                h.image = path;
+                h
+            })
+        });
+        // 高さ: スクロール中は細い帯、それ以外は広げた高さ。変わったらアニメーションをやり直す
+        let target_height =
+            if self.hero_collapsed { HERO_COLLAPSED_HEIGHT } else { Self::hero_full_height(window) };
+        if self.hero_height.1 != target_height {
+            let from = if self.hero_height.2 == 0 { target_height } else { self.hero_height.1 };
+            self.hero_height = (from, target_height, self.hero_height.2 + 1);
+        }
         if let Some(key) = self.shown.clone() {
             self.request_preview(&key, cx);
         }
@@ -1671,7 +1793,7 @@ impl Render for Dashboard {
             .child(self.render_title_bar(p, cx))
             // 大きな写真は上部に固定し、一覧だけをスクロールさせる。
             // 下の方の写真を選んでも、選んだ写真が常に見える。
-            .child(self.render_hero(hero, p, window, cx))
+            .child(self.render_hero(hero, loading, p, cx))
             .when(self.search_open || self.query.is_active(), |el| el.child(self.render_search_bar(p, cx)))
             .child(
                 div()
@@ -1684,6 +1806,13 @@ impl Render for Dashboard {
                             .size_full()
                             .overflow_y_scroll()
                             .track_scroll(&self.list_scroll)
+                            // スクロールが反映されたあとの位置で、大きな写真を細くするか決める
+                            .on_scroll(cx.listener(|_, _: &ScrollEvent, window, cx| {
+                                let entity = cx.entity().downgrade();
+                                window.on_next_frame(move |_, cx| {
+                                    entity.update(cx, |this, cx| this.on_list_scrolled(cx)).ok();
+                                });
+                            }))
                             .child(
                                 v_flex()
                                     .px_8()
