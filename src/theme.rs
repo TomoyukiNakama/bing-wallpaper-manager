@@ -3,7 +3,10 @@
 //! 写真が主役なので、UI は写真と競わない冷たい霧の色でまとめ、
 //! 操作できる場所だけを湖の青緑で示す。ダークモードでは夜の湖の配色にする。
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use gpui_kit::component::{Theme, ThemeMode};
+use serde::{Deserialize, Serialize};
 use gpui_kit::{App, Hsla, Window, WindowAppearance, rgb};
 
 pub const FONT: &str = "Noto Sans CJK JP";
@@ -65,15 +68,47 @@ impl Palette {
     }
 }
 
-/// `BWM_THEME=light|dark` で固定でき、なければシステムの外観に従う。
+/// 設定画面で選ぶ配色。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemePref {
+    /// OS のライト／ダークに合わせる
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePref {
+    pub const ALL: [ThemePref; 3] = [ThemePref::System, ThemePref::Light, ThemePref::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemePref::System => tr!("システムに合わせる", "Match the system"),
+            ThemePref::Light => tr!("ライト", "Light"),
+            ThemePref::Dark => tr!("ダーク", "Dark"),
+        }
+    }
+}
+
+/// 0 = System, 1 = Light, 2 = Dark
+static PREF: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_pref(pref: ThemePref) {
+    PREF.store(pref as u8, Ordering::Relaxed);
+}
+
+/// 環境変数 `BWM_THEME=light|dark`（撮影用）→ 設定 → システムの外観 の順に決める。
 pub fn is_dark(window: &Window) -> bool {
     match std::env::var("BWM_THEME").as_deref() {
-        Ok("dark") => true,
-        Ok("light") => false,
-        _ => matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        ),
+        Ok("dark") => return true,
+        Ok("light") => return false,
+        _ => {}
+    }
+    match PREF.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
     }
 }
 

@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+pub use crate::i18n::Language;
+pub use crate::theme::ThemePref;
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// 画像の保存先。未設定なら `~/Pictures/BingWallpaper`。
@@ -14,6 +17,12 @@ pub struct Config {
     /// 写真とモニターの縦横比が違うときの合わせ方。
     #[serde(default)]
     pub fit: FitMode,
+    /// 表示言語。
+    #[serde(default)]
+    pub language: Language,
+    /// 配色。
+    #[serde(default)]
+    pub theme: ThemePref,
 }
 
 /// 写真の縦横比がモニターと違うときの、壁紙への合わせ方（GNOME の picture-options）。
@@ -50,21 +59,36 @@ impl FitMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            FitMode::Zoom => "画面いっぱいに拡大",
-            FitMode::Scaled => "写真全体を表示",
-            FitMode::Stretched => "引き伸ばす",
-            FitMode::Centered => "中央に元の大きさで表示",
-            FitMode::Spanned => "複数のモニターにまたがる",
+            FitMode::Zoom => tr!("画面いっぱいに拡大", "Zoom to fill the screen"),
+            FitMode::Scaled => tr!("写真全体を表示", "Show the whole photo"),
+            FitMode::Stretched => tr!("引き伸ばす", "Stretch"),
+            FitMode::Centered => tr!("中央に元の大きさで表示", "Center at original size"),
+            FitMode::Spanned => tr!("複数のモニターにまたがる", "Span across monitors"),
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            FitMode::Zoom => "縦横比を保ったまま画面を埋めます。はみ出した上下または左右は切り取られます。",
-            FitMode::Scaled => "写真が切れないように縮小します。余った部分は単色の帯になります。",
-            FitMode::Stretched => "画面の形に合わせて引き伸ばします。写真の縦横比が変わります。",
-            FitMode::Centered => "拡大も縮小もせずに中央に置きます。画面より大きい写真は周りが切れます。",
-            FitMode::Spanned => "すべてのモニターを 1 枚の画面として写真を広げます。",
+            FitMode::Zoom => tr!(
+                "縦横比を保ったまま画面を埋めます。はみ出した上下または左右は切り取られます。",
+                "Fills the screen keeping the aspect ratio. Edges that overflow are cropped."
+            ),
+            FitMode::Scaled => tr!(
+                "写真が切れないように縮小します。余った部分は単色の帯になります。",
+                "Shrinks the photo so nothing is cut off. Leftover space becomes a solid band."
+            ),
+            FitMode::Stretched => tr!(
+                "画面の形に合わせて引き伸ばします。写真の縦横比が変わります。",
+                "Stretches the photo to the screen. The aspect ratio changes."
+            ),
+            FitMode::Centered => tr!(
+                "拡大も縮小もせずに中央に置きます。画面より大きい写真は周りが切れます。",
+                "Places the photo in the center without scaling. Larger photos are cropped."
+            ),
+            FitMode::Spanned => tr!(
+                "すべてのモニターを 1 枚の画面として写真を広げます。",
+                "Spreads the photo across all monitors as one screen."
+            ),
         }
     }
 }
@@ -97,7 +121,7 @@ impl Config {
             fs::create_dir_all(dir)?;
         }
         fs::write(&path, serde_json::to_string_pretty(self)?)
-            .with_context(|| format!("設定を保存できません: {}", path.display()))
+            .with_context(|| tr!(format!("設定を保存できません: {}", path.display()), format!("Cannot save settings: {}", path.display())))
     }
 
     pub fn save_dir(&self) -> PathBuf {

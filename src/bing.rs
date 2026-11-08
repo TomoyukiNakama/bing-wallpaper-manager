@@ -11,20 +11,22 @@ use serde::Deserialize;
 const BING: &str = "https://www.bing.com";
 
 /// ダッシュボードに表示するマーケット（地域）。
-pub const MARKETS: &[(&str, &str)] = &[
-    ("ja-JP", "日本"),
-    ("en-US", "米国"),
-    ("en-GB", "英国"),
-    ("de-DE", "ドイツ"),
-    ("fr-FR", "フランス"),
-    ("zh-CN", "中国"),
+/// （地域コード, 日本語名, 英語名）
+pub const MARKETS: &[(&str, &str, &str)] = &[
+    ("ja-JP", "日本", "Japan"),
+    ("en-US", "米国", "United States"),
+    ("en-GB", "英国", "United Kingdom"),
+    ("de-DE", "ドイツ", "Germany"),
+    ("fr-FR", "フランス", "France"),
+    ("zh-CN", "中国", "China"),
 ];
 
+/// 表示言語での地域名。
 pub fn market_name(code: &str) -> &str {
     MARKETS
         .iter()
-        .find(|(c, _)| *c == code)
-        .map(|(_, n)| *n)
+        .find(|(c, _, _)| *c == code)
+        .map(|(_, ja, en)| tr!(*ja, *en))
         .unwrap_or(code)
 }
 
@@ -76,9 +78,6 @@ impl BingImage {
         display_title(&self.title, &self.copyright)
     }
 
-    pub fn url(&self, resolution: &str) -> String {
-        format!("{BING}{}_{resolution}.jpg", self.urlbase)
-    }
 }
 
 fn parse_date(d: &str) -> Option<(i32, u32, u32)> {
@@ -88,8 +87,8 @@ fn parse_date(d: &str) -> Option<(i32, u32, u32)> {
     Some((d[0..4].parse().ok()?, d[4..6].parse().ok()?, d[6..8].parse().ok()?))
 }
 
-/// `20261108` → `11月8日（日）`（`with_year` なら先頭に `2026年`）
-pub fn date_ja(d: &str, with_year: bool) -> String {
+/// `20261108` → `11月8日（日）` / `Sun, Nov 8`（`with_year` なら年も付ける）
+pub fn date_text(d: &str, with_year: bool) -> String {
     let Some((y, m, day)) = parse_date(d) else {
         return d.to_string();
     };
@@ -97,11 +96,14 @@ pub fn date_ja(d: &str, with_year: bool) -> String {
     const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let yy = if m < 3 { y - 1 } else { y };
     let w = (yy + yy / 4 - yy / 100 + yy / 400 + T[(m - 1) as usize] + day as i32).rem_euclid(7);
-    let wd = ["日", "月", "火", "水", "木", "金", "土"][w as usize];
-    if with_year {
-        format!("{y}年{m}月{day}日（{wd}）")
+    if crate::i18n::is_en() {
+        let wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w as usize];
+        let mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            [(m - 1) as usize];
+        if with_year { format!("{wd}, {mon} {day}, {y}") } else { format!("{wd}, {mon} {day}") }
     } else {
-        format!("{m}月{day}日（{wd}）")
+        let wd = ["日", "月", "火", "水", "木", "金", "土"][w as usize];
+        if with_year { format!("{y}年{m}月{day}日（{wd}）") } else { format!("{m}月{day}日（{wd}）") }
     }
 }
 
@@ -122,23 +124,38 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// 直近 `count` 日分（最大 8）の画像情報を新しい順に取得する。
-pub fn fetch_archive(mkt: &str, count: u8) -> Result<Vec<BingImage>> {
+/// `idx` 日前から `count` 日分（最大 8）の画像情報を新しい順に取得する。
+pub fn fetch_archive(mkt: &str, idx: u8, count: u8) -> Result<Vec<BingImage>> {
     let url = format!(
-        "{BING}/HPImageArchive.aspx?format=js&idx=0&n={}&mkt={mkt}",
+        "{BING}/HPImageArchive.aspx?format=js&idx={idx}&n={}&mkt={mkt}",
         count.clamp(1, 8)
     );
     let archive: Archive = agent()
         .get(&url)
         .call()
-        .with_context(|| format!("画像一覧の取得に失敗しました ({mkt})"))?
+        .with_context(|| tr!(format!("画像一覧を取得できませんでした ({mkt})"), format!("Could not get the photo list ({mkt})")))?
         .body_mut()
         .read_json()
-        .with_context(|| format!("画像一覧の解析に失敗しました ({mkt})"))?;
+        .with_context(|| tr!(format!("画像一覧を読み取れませんでした ({mkt})"), format!("Could not read the photo list ({mkt})")))?;
     if archive.images.is_empty() {
-        bail!("Bing から画像が返されませんでした ({mkt})");
+        bail!(tr!(format!("Bing から写真が返されませんでした ({mkt})"), format!("Bing returned no photos ({mkt})")));
     }
     Ok(archive.images)
+}
+
+/// 公式 API でさかのぼれる範囲（今日から 15 日分）を新しい順に取得する。
+/// API の `idx` は 7 までしか効かないので、0〜7 日前と 7〜14 日前の 2 回に分けて取る。
+pub fn fetch_recent(mkt: &str) -> Result<Vec<BingImage>> {
+    let mut images = fetch_archive(mkt, 0, 8)?;
+    if let Ok(older) = fetch_archive(mkt, 7, 8) {
+        for img in older {
+            if !images.iter().any(|i| i.startdate == img.startdate) {
+                images.push(img);
+            }
+        }
+    }
+    images.sort_by(|a, b| b.startdate.cmp(&a.startdate));
+    Ok(images)
 }
 
 /// `url` を `dest` に保存する。既に存在する場合は何もしない。
@@ -147,16 +164,16 @@ pub fn download(url: &str, dest: &Path) -> Result<()> {
         return Ok(());
     }
     if let Some(dir) = dest.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("{} を作成できません", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| tr!(format!("{} を作成できません", dir.display()), format!("Cannot create {}", dir.display())))?;
     }
     let resp = agent()
         .get(url)
         .call()
-        .with_context(|| format!("ダウンロードに失敗しました: {url}"))?;
+        .with_context(|| tr!(format!("ダウンロードできませんでした: {url}"), format!("Download failed: {url}")))?;
     let tmp = dest.with_extension("part");
     {
         let mut file = fs::File::create(&tmp)
-            .with_context(|| format!("{} に書き込めません", tmp.display()))?;
+            .with_context(|| tr!(format!("{} に書き込めません", tmp.display()), format!("Cannot write {}", tmp.display())))?;
         io::copy(&mut resp.into_body().into_reader(), &mut file)?;
     }
     fs::rename(&tmp, dest)?;
@@ -187,7 +204,7 @@ mod tests {
 
     #[test]
     fn japanese_date() {
-        assert_eq!(date_ja("20261108", false), "11月8日（日）");
-        assert_eq!(date_ja("20260101", true), "2026年1月1日（木）");
+        assert_eq!(date_text("20261108", false), "11月8日（日）");
+        assert_eq!(date_text("20260101", true), "2026年1月1日（木）");
     }
 }
