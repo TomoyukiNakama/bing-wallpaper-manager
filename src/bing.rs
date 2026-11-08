@@ -21,13 +21,13 @@ pub const MARKETS: &[(&str, &str, &str)] = &[
     ("zh-CN", "中国", "China"),
 ];
 
-/// 表示言語での地域名。
-pub fn market_name(code: &str) -> &str {
-    MARKETS
-        .iter()
-        .find(|(c, _, _)| *c == code)
-        .map(|(_, ja, en)| tr!(*ja, *en))
-        .unwrap_or(code)
+/// 表示言語での地域名（翻訳キーは `region.ja_jp` のような形）。
+pub fn market_name(code: &str) -> String {
+    if MARKETS.iter().any(|(c, _, _)| *c == code) {
+        crate::i18n::text(&format!("region.{}", code.to_lowercase().replace('-', "_")))
+    } else {
+        code.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,7 +87,7 @@ fn parse_date(d: &str) -> Option<(i32, u32, u32)> {
     Some((d[0..4].parse().ok()?, d[4..6].parse().ok()?, d[6..8].parse().ok()?))
 }
 
-/// `20261108` → `11月8日（日）` / `Sun, Nov 8`（`with_year` なら年も付ける）
+/// `20261108` を表示言語の日付にする（例: `11月8日（日）`、`Sun, Nov 8`）。`with_year` なら年も付ける。
 pub fn date_text(d: &str, with_year: bool) -> String {
     let Some((y, m, day)) = parse_date(d) else {
         return d.to_string();
@@ -96,15 +96,7 @@ pub fn date_text(d: &str, with_year: bool) -> String {
     const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let yy = if m < 3 { y - 1 } else { y };
     let w = (yy + yy / 4 - yy / 100 + yy / 400 + T[(m - 1) as usize] + day as i32).rem_euclid(7);
-    if crate::i18n::is_en() {
-        let wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w as usize];
-        let mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-            [(m - 1) as usize];
-        if with_year { format!("{wd}, {mon} {day}, {y}") } else { format!("{wd}, {mon} {day}") }
-    } else {
-        let wd = ["日", "月", "火", "水", "木", "金", "土"][w as usize];
-        if with_year { format!("{y}年{m}月{day}日（{wd}）") } else { format!("{m}月{day}日（{wd}）") }
-    }
+    crate::i18n::format_date(y, m, day, w as usize, with_year)
 }
 
 pub fn display_title(title: &str, copyright: &str) -> String {
@@ -133,12 +125,12 @@ pub fn fetch_archive(mkt: &str, idx: u8, count: u8) -> Result<Vec<BingImage>> {
     let archive: Archive = agent()
         .get(&url)
         .call()
-        .with_context(|| tr!(format!("画像一覧を取得できませんでした ({mkt})"), format!("Could not get the photo list ({mkt})")))?
+        .with_context(|| tr!("error.bing_fetch", market = mkt))?
         .body_mut()
         .read_json()
-        .with_context(|| tr!(format!("画像一覧を読み取れませんでした ({mkt})"), format!("Could not read the photo list ({mkt})")))?;
+        .with_context(|| tr!("error.bing_parse", market = mkt))?;
     if archive.images.is_empty() {
-        bail!(tr!(format!("Bing から写真が返されませんでした ({mkt})"), format!("Bing returned no photos ({mkt})")));
+        bail!(tr!("error.bing_empty", market = mkt));
     }
     Ok(archive.images)
 }
@@ -164,16 +156,16 @@ pub fn download(url: &str, dest: &Path) -> Result<()> {
         return Ok(());
     }
     if let Some(dir) = dest.parent() {
-        fs::create_dir_all(dir).with_context(|| tr!(format!("{} を作成できません", dir.display()), format!("Cannot create {}", dir.display())))?;
+        fs::create_dir_all(dir).with_context(|| tr!("error.create_dir", path = dir.display()))?;
     }
     let resp = agent()
         .get(url)
         .call()
-        .with_context(|| tr!(format!("ダウンロードできませんでした: {url}"), format!("Download failed: {url}")))?;
+        .with_context(|| tr!("error.download", url = url))?;
     let tmp = dest.with_extension("part");
     {
         let mut file = fs::File::create(&tmp)
-            .with_context(|| tr!(format!("{} に書き込めません", tmp.display()), format!("Cannot write {}", tmp.display())))?;
+            .with_context(|| tr!("error.write", path = tmp.display()))?;
         io::copy(&mut resp.into_body().into_reader(), &mut file)?;
     }
     fs::rename(&tmp, dest)?;

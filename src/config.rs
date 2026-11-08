@@ -57,38 +57,23 @@ impl FitMode {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            FitMode::Zoom => tr!("画面いっぱいに拡大", "Zoom to fill the screen"),
-            FitMode::Scaled => tr!("写真全体を表示", "Show the whole photo"),
-            FitMode::Stretched => tr!("引き伸ばす", "Stretch"),
-            FitMode::Centered => tr!("中央に元の大きさで表示", "Center at original size"),
-            FitMode::Spanned => tr!("複数のモニターにまたがる", "Span across monitors"),
+            FitMode::Zoom => tr!("fit.zoom"),
+            FitMode::Scaled => tr!("fit.scaled"),
+            FitMode::Stretched => tr!("fit.stretched"),
+            FitMode::Centered => tr!("fit.centered"),
+            FitMode::Spanned => tr!("fit.spanned"),
         }
     }
 
-    pub fn description(self) -> &'static str {
+    pub fn description(self) -> String {
         match self {
-            FitMode::Zoom => tr!(
-                "縦横比を保ったまま画面を埋めます。はみ出した上下または左右は切り取られます。",
-                "Fills the screen keeping the aspect ratio. Edges that overflow are cropped."
-            ),
-            FitMode::Scaled => tr!(
-                "写真が切れないように縮小します。余った部分は単色の帯になります。",
-                "Shrinks the photo so nothing is cut off. Leftover space becomes a solid band."
-            ),
-            FitMode::Stretched => tr!(
-                "画面の形に合わせて引き伸ばします。写真の縦横比が変わります。",
-                "Stretches the photo to the screen. The aspect ratio changes."
-            ),
-            FitMode::Centered => tr!(
-                "拡大も縮小もせずに中央に置きます。画面より大きい写真は周りが切れます。",
-                "Places the photo in the center without scaling. Larger photos are cropped."
-            ),
-            FitMode::Spanned => tr!(
-                "すべてのモニターを 1 枚の画面として写真を広げます。",
-                "Spreads the photo across all monitors as one screen."
-            ),
+            FitMode::Zoom => tr!("fit.zoom_desc"),
+            FitMode::Scaled => tr!("fit.scaled_desc"),
+            FitMode::Stretched => tr!("fit.stretched_desc"),
+            FitMode::Centered => tr!("fit.centered_desc"),
+            FitMode::Spanned => tr!("fit.spanned_desc"),
         }
     }
 }
@@ -121,7 +106,7 @@ impl Config {
             fs::create_dir_all(dir)?;
         }
         fs::write(&path, serde_json::to_string_pretty(self)?)
-            .with_context(|| tr!(format!("設定を保存できません: {}", path.display()), format!("Cannot save settings: {}", path.display())))
+            .with_context(|| tr!("error.save_settings", path = path.display()))
     }
 
     pub fn save_dir(&self) -> PathBuf {

@@ -75,16 +75,14 @@ fn to_source(entry: Entry, market: &str) -> Option<PhotoSource> {
         startdate,
         title: entry.caption.clone().unwrap_or_default(),
         copyright: copyright.clone(),
-        english: market
-            .starts_with("en-")
-            .then(|| (entry.caption.clone().unwrap_or_default(), copyright.clone())),
+        localized: vec![(market.to_string(), entry.caption.clone().unwrap_or_default(), copyright.clone())],
         urlbase,
         mirror_url: entry.url,
     })
 }
 
 fn fetch_market(market: &str) -> Result<Vec<PhotoSource>> {
-    let path = archive_path(market).context(tr!("対応していない地域です", "Unsupported region"))?;
+    let path = archive_path(market).context(tr!("error.unsupported_region"))?;
     let url = format!("{BASE}/{path}.json");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
@@ -94,12 +92,12 @@ fn fetch_market(market: &str) -> Result<Vec<PhotoSource>> {
     let entries: Vec<Entry> = agent
         .get(&url)
         .call()
-        .with_context(|| tr!(format!("{SOURCE_NAME} から一覧を取得できませんでした ({market})"), format!("Could not get the list from {SOURCE_NAME} ({market})")))?
+        .with_context(|| tr!("error.archive_fetch", source = SOURCE_NAME, market = market))?
         .body_mut()
         .with_config()
         .limit(32 * 1024 * 1024)
         .read_json()
-        .with_context(|| tr!(format!("{SOURCE_NAME} の一覧を読み取れませんでした ({market})"), format!("Could not read the list from {SOURCE_NAME} ({market})")))?;
+        .with_context(|| tr!("error.archive_parse", source = SOURCE_NAME, market = market))?;
     Ok(entries.into_iter().filter_map(|e| to_source(e, market)).collect())
 }
 
@@ -125,10 +123,8 @@ pub fn fetch_all() -> (Vec<ArchivePhoto>, Vec<anyhow::Error>) {
                             if !photo.markets.contains(&market) {
                                 photo.markets.push(market);
                             }
-                            // 英語圏の地域の見出しと説明を英語版として持つ
-                            if photo.source.english.is_none() {
-                                photo.source.english = source.english;
-                            }
+                            // 地域ごとの見出しと説明をまとめて持つ
+                            photo.source.localized.extend(source.localized);
                         }
                         None => {
                             index.insert(source.key.clone(), photos.len());

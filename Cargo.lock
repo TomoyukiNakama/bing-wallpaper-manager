@@ -558,6 +558,7 @@ dependencies = [
  "anyhow",
  "dirs 7.0.0",
  "gpui-kit",
+ "rust-i18n",
  "serde",
  "serde_json",
  "ureq",

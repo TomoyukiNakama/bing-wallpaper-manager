@@ -8,6 +8,8 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::{Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
@@ -35,27 +37,36 @@ enum Section {
 impl Section {
     const ALL: [Section; 4] = [Section::General, Section::Wallpaper, Section::Storage, Section::About];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Section::General => tr!("一般", "General"),
-            Section::Wallpaper => tr!("壁紙", "Wallpaper"),
-            Section::Storage => tr!("保存先", "Storage"),
-            Section::About => tr!("このアプリについて", "About"),
+            Section::General => tr!("settings.general"),
+            Section::Wallpaper => tr!("settings.wallpaper"),
+            Section::Storage => tr!("settings.storage"),
+            Section::About => tr!("settings.about"),
         }
     }
 }
+
+/// 言語のドロップダウン（項目は Language::ALL の表示名）。
+type LanguageSelect = SelectState<Vec<String>>;
 
 pub struct SettingsView {
     dashboard: Entity<Dashboard>,
     section: Section,
     libraries: Vec<[&'static str; 4]>,
+    /// 言語は 12 個あるので、ラジオボタンではなくドロップダウンにする（デザインガイド: 長い選択肢は Select）
+    language_select: Entity<LanguageSelect>,
     _observe: Subscription,
+    _language_events: Subscription,
 }
 
 impl SettingsView {
-    pub fn new(dashboard: Entity<Dashboard>, cx: &mut Context<Self>) -> Self {
+    /// `language` は今の設定。ダイアログは Dashboard の更新中に作られるので、ここで Dashboard を読まない。
+    pub fn new(dashboard: Entity<Dashboard>, language: Language, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // ダッシュボードの状態（表示中の写真・設定）が変わったら描き直す
         let observe = cx.observe(&dashboard, |_, _, cx| cx.notify());
+        let language_select = Self::new_language_select(language, window, cx);
+        let language_events = Self::subscribe_language(&language_select, window, cx);
         let libraries = THIRD_PARTY
             .lines()
             .filter_map(|l| {
@@ -63,7 +74,33 @@ impl SettingsView {
                 Some([f.next()?, f.next()?, f.next()?, f.next()?])
             })
             .collect();
-        Self { dashboard, section: Section::General, libraries, _observe: observe }
+        Self {
+            dashboard,
+            section: Section::General,
+            libraries,
+            language_select,
+            _observe: observe,
+            _language_events: language_events,
+        }
+    }
+
+    fn new_language_select(language: Language, window: &mut Window, cx: &mut Context<Self>) -> Entity<LanguageSelect> {
+        let labels: Vec<String> = Language::ALL.iter().map(|l| l.label()).collect();
+        let selected = Language::ALL.iter().position(|l| *l == language).map(IndexPath::new);
+        cx.new(|cx| SelectState::new(labels, selected, window, cx))
+    }
+
+    fn subscribe_language(select: &Entity<LanguageSelect>, window: &mut Window, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe_in(select, window, |this, select, event: &SelectEvent<Vec<String>>, window, cx| {
+            let SelectEvent::Confirm(Some(_)) = event else { return };
+            let Some(ix) = select.read(cx).selected_index(cx).map(|ix| ix.row) else { return };
+            let language = Language::ALL[ix];
+            this.dashboard.update(cx, |d, cx| d.set_language(language, window, cx));
+            // 「自動」の表示名も新しい言語にするため、項目を作り直す
+            this.language_select = Self::new_language_select(language, window, cx);
+            this._language_events = Self::subscribe_language(&this.language_select, window, cx);
+            cx.notify();
+        })
     }
 
     fn render_nav(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -90,13 +127,19 @@ impl SettingsView {
     }
 
     /// 項目名・説明・操作部品からなる 1 行（例: 「言語 / 画面の表示言語…」）。
-    fn field(title: &str, description: String, control: impl IntoElement, p: Palette) -> impl IntoElement {
+    fn field(
+        title: impl Into<SharedString>,
+        description: impl Into<SharedString>,
+        control: impl IntoElement,
+        p: Palette,
+    ) -> impl IntoElement {
+        let (title, description): (SharedString, SharedString) = (title.into(), description.into());
         v_flex()
             .gap_2()
             .child(
                 v_flex()
                     .gap_0p5()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.ink).child(title.to_string()))
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.ink).child(title))
                     .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(description)),
             )
             .child(control)
@@ -104,14 +147,7 @@ impl SettingsView {
 
     fn render_general(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let config = &self.dashboard.read(cx).config;
-        let (language, theme) = (config.language, config.theme);
-        let set_language = {
-            let dashboard = self.dashboard.clone();
-            move |ix: &usize, window: &mut Window, cx: &mut App| {
-                let lang = Language::ALL[*ix];
-                dashboard.update(cx, |this, cx| this.set_language(lang, window, cx));
-            }
-        };
+        let theme = config.theme;
         let set_theme = {
             let dashboard = self.dashboard.clone();
             move |ix: &usize, window: &mut Window, cx: &mut App| {
@@ -122,21 +158,14 @@ impl SettingsView {
         v_flex()
             .gap_6()
             .child(Self::field(
-                tr!("言語", "Language"),
-                tr!("画面の表示言語。自動は OS の言語に合わせます。", "Display language. Automatic follows the OS.").into(),
-                RadioGroup::vertical("language")
-                    .selected_index(Language::ALL.iter().position(|l| *l == language))
-                    .children(Language::ALL.iter().enumerate().map(|(i, l)| Radio::new(("language", i)).label(l.label())))
-                    .on_change(set_language),
+                tr!("settings.language"),
+                tr!("settings.language_desc"),
+                div().w(px(300.)).child(Select::new(&self.language_select)),
                 p,
             ))
             .child(Self::field(
-                tr!("テーマ", "Theme"),
-                tr!(
-                    "配色。システムに合わせると OS のライト／ダークに追従します。",
-                    "Color scheme. Match the system follows the OS light or dark mode."
-                )
-                .into(),
+                tr!("settings.theme"),
+                tr!("settings.theme_desc"),
                 RadioGroup::vertical("theme")
                     .selected_index(ThemePref::ALL.iter().position(|t| *t == theme))
                     .children(ThemePref::ALL.iter().enumerate().map(|(i, t)| Radio::new(("theme", i)).label(t.label())))
@@ -200,22 +229,11 @@ impl SettingsView {
         };
         let mut note = fit.description().to_string();
         if ours {
-            note.push_str(tr!(" 今の壁紙にもすぐ反映されます。", " The current wallpaper updates right away."));
+            note.push_str(&tr!("settings.fit_applies_now"));
         }
         Self::field(
-            tr!("表示方法", "Fit"),
-            tr!(
-                format!(
-                    "写真とモニター（{}×{}）の縦横比が違うときの合わせ方です。下は表示中の写真での見え方です。",
-                    monitor.width.round(),
-                    monitor.height.round()
-                ),
-                format!(
-                    "How the photo fits when its shape differs from the monitor ({}×{}). Below is a preview with the shown photo.",
-                    monitor.width.round(),
-                    monitor.height.round()
-                )
-            ),
+            tr!("settings.fit"),
+            tr!("settings.fit_desc", size = format!("{}×{}", monitor.width.round(), monitor.height.round())),
             v_flex()
                 .gap_3()
                 .child(self.render_preview(fit, monitor, p, cx))
@@ -245,24 +263,20 @@ impl SettingsView {
             }
         };
         Self::field(
-            tr!("保存先", "Storage folder"),
-            tr!(
-                "取得した写真はここに保管され、日が変わると「過去の写真」に並びます。",
-                "Downloaded photos are kept here and appear under Earlier photos the next day."
-            )
-            .into(),
+            tr!("settings.storage_folder"),
+            tr!("settings.storage_desc"),
             v_flex()
                 .gap_3()
                 .child(div().text_sm().text_color(p.ink).child(save_dir))
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(Button::new("choose-dir").small().label(tr!("変更…", "Change…")).on_click(choose_dir))
+                        .child(Button::new("choose-dir").small().label(tr!("settings.change_dir")).on_click(choose_dir))
                         .child(
                             Button::new("open-dir")
                                 .small()
                                 .ghost()
-                                .label(tr!("フォルダを開く", "Open folder"))
+                                .label(tr!("settings.open_dir"))
                                 .on_click(open_dir),
                         ),
                 ),
@@ -271,11 +285,11 @@ impl SettingsView {
     }
 
     fn render_about(&self, p: Palette) -> impl IntoElement {
-        let row = |label: &str, value: String| {
+        let row = |label: String, value: String| {
             h_flex()
                 .gap_4()
                 .text_sm()
-                .child(div().w(px(120.)).text_color(p.slate).child(label.to_string()))
+                .child(div().w(px(120.)).text_color(p.slate).child(label))
                 .child(div().text_color(p.ink).child(value))
         };
         let libraries = self.libraries.iter().enumerate().map(|(i, [name, version, license, url])| {
@@ -300,13 +314,13 @@ impl SettingsView {
                     .text_base()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(p.ink)
-                    .child(tr!("Bing 壁紙", "Bing Wallpaper")),
+                    .child(tr!("app.name")),
             )
             .child(
                 v_flex()
                     .gap_1()
-                    .child(row(tr!("バージョン", "Version"), env!("CARGO_PKG_VERSION").to_string()))
-                    .child(row(tr!("ライセンス", "License"), env!("CARGO_PKG_LICENSE").to_string())),
+                    .child(row(tr!("about.version"), env!("CARGO_PKG_VERSION").to_string()))
+                    .child(row(tr!("about.license"), env!("CARGO_PKG_LICENSE").to_string())),
             )
             .child(
                 div()
@@ -314,10 +328,7 @@ impl SettingsView {
                     .text_color(p.ink)
                     .child(format!("Copyright (c) 2026 {}", env!("CARGO_PKG_AUTHORS"))),
             )
-            .child(div().text_xs().text_color(p.slate).child(tr!(
-                "MIT License と Apache License 2.0 のどちらかを選んで利用できます。",
-                "You may use it under either the MIT License or the Apache License 2.0."
-            )))
+            .child(div().text_xs().text_color(p.slate).child(tr!("about.license_note")))
             .child(
                 h_flex()
                     .gap_2()
@@ -340,14 +351,8 @@ impl SettingsView {
                 v_flex()
                     .pt_2()
                     .gap_1()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.ink).child(tr!(
-                        format!("使用しているライブラリ（{} 件）", self.libraries.len()),
-                        format!("Libraries used ({})", self.libraries.len())
-                    )))
-                    .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(tr!(
-                        "クリックするとそのライブラリのページを開きます。一覧は THIRD_PARTY_LICENSES.md にもあります。",
-                        "Click a library to open its page. The list is also in THIRD_PARTY_LICENSES.md."
-                    ))),
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(p.ink).child(tr!("about.libraries", count = self.libraries.len())))
+                    .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(tr!("about.libraries_note"))),
             )
             .child(
                 div()

@@ -11,9 +11,9 @@ fn gsettings(key: &str, value: &str) -> Result<()> {
     let status = Command::new("gsettings")
         .args(["set", "org.gnome.desktop.background", key, value])
         .status()
-        .context(tr!("gsettings を実行できません（GNOME 環境が必要です）", "Cannot run gsettings (GNOME is required)"))?;
+        .context(tr!("error.gsettings_missing"))?;
     if !status.success() {
-        bail!(tr!(format!("gsettings set {key} が失敗しました ({status})"), format!("gsettings set {key} failed ({status})")));
+        bail!(tr!("error.gsettings_failed", key = key, status = status));
     }
     Ok(())
 }
@@ -41,7 +41,7 @@ pub fn set_fit(fit: FitMode) -> Result<()> {
 pub fn set_wallpaper(path: &Path, fit: FitMode) -> Result<()> {
     let path = path
         .canonicalize()
-        .with_context(|| tr!(format!("{} が見つかりません", path.display()), format!("{} not found", path.display())))?;
+        .with_context(|| tr!("error.not_found", path = path.display()))?;
     let uri = file_uri(&path);
     gsettings("picture-uri", &uri)?;
     gsettings("picture-uri-dark", &uri)?;
@@ -76,7 +76,7 @@ pub fn open_file(path: &Path) -> Result<()> {
     Command::new("xdg-open")
         .arg(path)
         .spawn()
-        .context(tr!("xdg-open を実行できません", "Cannot run xdg-open"))?;
+        .context(tr!("error.xdg_open"))?;
     Ok(())
 }
 
@@ -112,7 +112,7 @@ pub fn open_folder(path: &Path) -> Result<()> {
     Command::new("xdg-open")
         .arg(path)
         .spawn()
-        .context(tr!("xdg-open を実行できません", "Cannot run xdg-open"))?;
+        .context(tr!("error.xdg_open"))?;
     Ok(())
 }
 

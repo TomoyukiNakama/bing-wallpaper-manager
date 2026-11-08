@@ -82,11 +82,11 @@ pub enum ThemePref {
 impl ThemePref {
     pub const ALL: [ThemePref; 3] = [ThemePref::System, ThemePref::Light, ThemePref::Dark];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ThemePref::System => tr!("システムに合わせる", "Match the system"),
-            ThemePref::Light => tr!("ライト", "Light"),
-            ThemePref::Dark => tr!("ダーク", "Dark"),
+            ThemePref::System => tr!("theme.system"),
+            ThemePref::Light => tr!("theme.light"),
+            ThemePref::Dark => tr!("theme.dark"),
         }
     }
 }

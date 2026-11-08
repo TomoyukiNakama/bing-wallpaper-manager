@@ -61,7 +61,9 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   例: 主要な操作はキーボード（Actions）でも使えるようにする、写真への操作は右クリックメニューと「…」ボタンの両方から出す、
   設定はフッターではなく設定パネル（Sheet）に置く、押せない「状態」は無効化ボタンではなく表示として出す。
 - Wayland では gpui の `primary_display()` が常に None。モニター情報は `window.display(cx)` から取る。
-- 画面の文言はすべて `tr!("日本語", "English")` で両方書く（`src/i18n.rs`）。日本語だけの文字列を追加しない。
-  英語表示の確認は、設定ダイアログで English を選んでから撮影する（撮影スクリプトは毎回設定を初期化する）。
+- 画面の文言はコードに直接書かず、`locales/*.yml`（11 言語）にキーを追加して `tr!("キー")` / `tr!("キー", count = n)` で参照する。
+  新しいキーは全言語のファイルに追加する（`cargo test` の `every_language_has_every_key` で確認される）。差し込みは `%{name}`。
+  各言語の見た目は `BWM_LANG=de scripts/screenshot.sh ...` のように言語を固定して撮影して確認する。
+- 設定ダイアログ（SettingsView）は Dashboard の更新中に作られる。`SettingsView::new` の中で Dashboard を read しない（パニックする）。
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。

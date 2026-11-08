@@ -11,6 +11,7 @@
 //! 最近の写真（Bing 公式 API）は壁紙用の画像まで保管する。アーカイブから読み込んだ
 //! 古い写真はサムネイルだけを保管し、壁紙にするときに画像を取得する。
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,12 +32,12 @@ pub struct PhotoSource {
     pub urlbase: String,
     /// アーカイブが保存している画像。Bing の URL が無い古い写真で使う。
     pub mirror_url: Option<String>,
-    /// 英語圏の地域で配信された見出しと説明（英語表示で使う）。
-    pub english: Option<(String, String)>,
+    /// 地域ごとの見出しと説明（地域コード, 見出し, 説明）。表示言語に合うものを選ぶ。
+    pub localized: Vec<(String, String, String)>,
 }
 
 impl PhotoSource {
-    /// 公式 API の 1 枚。英語圏の地域（`en-`）なら、その見出しと説明を英語版としても持つ。
+    /// 公式 API の 1 枚。配信した地域の見出しと説明も持つ。
     pub fn from_bing(img: &BingImage, market: &str) -> Self {
         Self {
             key: img.key(),
@@ -45,9 +46,7 @@ impl PhotoSource {
             copyright: img.copyright.clone(),
             urlbase: img.urlbase.clone(),
             mirror_url: None,
-            english: market
-                .starts_with("en-")
-                .then(|| (img.title.clone(), img.copyright.clone())),
+            localized: vec![(market.to_string(), img.title.clone(), img.copyright.clone())],
         }
     }
 
@@ -73,31 +72,45 @@ pub struct StoredImage {
     /// この画像が配信された地域。
     #[serde(default)]
     pub markets: Vec<String>,
-    /// 英語圏の地域で配信されたときの見出しと説明（英語表示で使う）
+    /// 地域ごとの見出しと説明（地域コード → (見出し, 説明)）。表示言語に合うものを選ぶ。
     #[serde(default)]
-    pub title_en: Option<String>,
-    #[serde(default)]
-    pub copyright_en: Option<String>,
+    pub localized: BTreeMap<String, (String, String)>,
+    /// 以前の形式（英語版だけを持っていた）。読み込み時だけ使う。
+    #[serde(default, skip_serializing)]
+    title_en: Option<String>,
+    #[serde(default, skip_serializing)]
+    copyright_en: Option<String>,
     /// 壁紙用の画像（保存先からの相対パス）。サムネイルだけ保管している間は None。
     #[serde(default)]
     pub image_file: Option<String>,
 }
 
 impl StoredImage {
+    /// 表示言語に合う地域の見出しと説明。無ければ最初に保管したときのもの。
+    fn texts(&self) -> (&str, &str) {
+        let language = crate::i18n::current();
+        for market in language.content_markets() {
+            if let Some((t, c)) = self.localized.get(*market) {
+                return (t, c);
+            }
+            if market.starts_with("en-") {
+                if let (Some(t), Some(c)) = (&self.title_en, &self.copyright_en) {
+                    return (t, c);
+                }
+            }
+        }
+        (&self.title, &self.copyright)
+    }
+
     /// 表示言語に合わせた見出し。
     pub fn display_title(&self) -> String {
-        match (crate::i18n::is_en(), &self.title_en, &self.copyright_en) {
-            (true, Some(t), Some(c)) => bing::display_title(t, c),
-            _ => bing::display_title(&self.title, &self.copyright),
-        }
+        let (title, copyright) = self.texts();
+        bing::display_title(title, copyright)
     }
 
     /// 表示言語に合わせた説明（撮影地と著作権表示）。
     pub fn display_copyright(&self) -> &str {
-        match (crate::i18n::is_en(), &self.copyright_en) {
-            (true, Some(c)) => c,
-            _ => &self.copyright,
-        }
+        self.texts().1
     }
 
     fn source(&self) -> PhotoSource {
@@ -108,7 +121,7 @@ impl StoredImage {
             copyright: self.copyright.clone(),
             urlbase: self.urlbase.clone(),
             mirror_url: self.mirror_url.clone(),
-            english: None,
+            localized: Vec::new(),
         }
     }
 }
@@ -164,7 +177,7 @@ impl Library {
         let url = image
             .source()
             .bing_url("1920x1080")
-            .context(tr!("この写真には Bing の画像がありません", "This photo has no Bing image"))?;
+            .context(tr!("error.no_bing_image"))?;
         bing::download(&url, &path)?;
         Ok(path)
     }
@@ -178,7 +191,7 @@ impl Library {
         fs::create_dir_all(self.meta_dir())?;
         let path = self.meta_dir().join(format!("{}.json", meta.key));
         fs::write(&path, serde_json::to_string_pretty(meta)?)
-            .with_context(|| tr!(format!("{} に書き込めません", path.display()), format!("Cannot write {}", path.display())))
+            .with_context(|| tr!("error.write", path = path.display()))
     }
 
     /// 保管済みの画像をすべて新しい順に返す。
@@ -205,6 +218,7 @@ impl Library {
             urlbase: src.urlbase.clone(),
             mirror_url: src.mirror_url.clone(),
             markets: Vec::new(),
+            localized: BTreeMap::new(),
             title_en: None,
             copyright_en: None,
             image_file: None,
@@ -224,12 +238,11 @@ impl Library {
                 meta.markets.push(market.to_string());
             }
         }
-        if let Some((title, copyright)) = &src.english {
-            meta.title_en = Some(title.clone());
-            meta.copyright_en = Some(copyright.clone());
+        for (market, title, copyright) in &src.localized {
+            meta.localized.insert(market.clone(), (title.clone(), copyright.clone()));
         }
 
-        let thumb_url = src.thumb_url().context(tr!("この写真には画像の URL がありません", "This photo has no image URL"))?;
+        let thumb_url = src.thumb_url().context(tr!("error.no_image_url"))?;
         bing::download(&thumb_url, &self.thumb_path(&src.key))?;
 
         if with_image && self.image_path(&meta).is_none() {
@@ -272,6 +285,6 @@ impl Library {
                 Err(err) => last_err = Some(err),
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!(tr!("この写真には画像の URL がありません", "This photo has no image URL"))))
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!(tr!("error.no_image_url"))))
     }
 }
