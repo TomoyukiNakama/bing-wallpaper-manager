@@ -51,26 +51,70 @@ Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用�
 
 両プロジェクトに感謝します。そのほかのライブラリは [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) にまとめています。
 
-## ビルド
-
-gpui-kit が依存する gpui は、Ubuntu 26.04 標準の rustc 1.93 ではビルドできません。rustup で新しい stable を入れてください。
-`.cargo/config.toml` で cargo が `scripts/rustc-stable` を使うようにしてあり、これが rustup の stable の rustc を探して実行します。そのため `cargo` 自体は Ubuntu 標準のままで構いません。rustup が無い環境では、PATH 上の `rustc` を使います。
-
-```sh
-# rustup が無い場合（PATH の変更は不要）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-
-cargo run --release
-```
-
 ## インストール
 
-`scripts/install.sh` が（必要ならビルドしてから）アプリ・アイコン・デスクトップ項目を `~/.local` に入れます。GNOME のアプリ一覧に「Bing 壁紙」が出るようになり、ウィンドウにもアイコンが付きます。
+### 動作環境
+
+- GNOME デスクトップの Ubuntu（Ubuntu 26.04 で開発。Wayland と X11 のどちらでも動きます）。壁紙は GNOME の `gsettings` で設定します
+- Vulkan に対応したグラフィックスドライバー（通常の Ubuntu デスクトップには入っています）
+
+### 1. ビルドに必要なパッケージを入れる
 
 ```sh
-scripts/install.sh               # ~/.local に入れる
-PREFIX=/path scripts/install.sh  # 別の場所に入れる
+sudo apt install git curl build-essential
+```
+
+フォント処理のライブラリの一部を C からビルドするため、C コンパイラ（`build-essential`）が必要です。
+
+### 2. Rust を入れる
+
+[rustup](https://rustup.rs) で最新の stable の Rust を入れます。Ubuntu 26.04 に含まれる Rust（1.93）は古く、GPUI をビルドできません。
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"   # または新しいターミナルを開く
+```
+
+PATH の `cargo` を Ubuntu 標準のままにしておきたい場合も、そのままビルドできます。`.cargo/config.toml` で cargo が `scripts/rustc-stable` を使うようにしてあり、これが rustup の stable の rustc を探して実行します（rustup が無ければ PATH 上の `rustc` を使います）。
+
+### 3. ソースを取得する
+
+```sh
+git clone https://github.com/TomoyukiNakama/bing-wallpaper-manager.git
+cd bing-wallpaper-manager
+```
+
+### 4. ビルドしてインストールする
+
+```sh
+scripts/install.sh
+```
+
+リリース版をビルドし、アプリ・アイコン・デスクトップ項目を `~/.local` に入れます。GNOME のアプリ一覧に「Bing 壁紙」が出ます（すぐに出ないときは、一度ログアウトしてログインし直してください）。`~/.local/bin` が PATH に入っていれば、ターミナルから `bing-wallpaper-manager` でも起動できます。初回のビルドは依存ライブラリをすべてダウンロードしてコンパイルするため、数分かかります。
+
+別の場所に入れるときは、`PREFIX=/opt/bing-wallpaper scripts/install.sh` のように `PREFIX` を指定します。
+
+### 更新する
+
+```sh
+git pull
+scripts/install.sh
+```
+
+`scripts/install.sh` は毎回ビルドしてから入れるので、`git pull` のあとに実行すれば新しい版になります。
+
+### アンインストール
+
+```sh
 scripts/install.sh --uninstall
+```
+
+アプリ・アイコン・デスクトップ項目を削除します。設定（`~/.config/bing-wallpaper-manager/`）と保存した写真（保存先のフォルダ）は残るので、不要なら手で削除してください。
+
+### インストールせずに動かす
+
+```sh
+cargo run --release
 ```
 
 ## 保存先
@@ -122,8 +166,9 @@ Persistent=true
 WantedBy=timers.target
 ```
 
+タイマーは `scripts/install.sh` で入れたアプリ（`~/.local/bin/bing-wallpaper-manager`）を実行します。
+
 ```sh
-install -Dm755 target/release/bing-wallpaper-manager ~/.local/bin/bing-wallpaper-manager
 systemctl --user daemon-reload
 systemctl --user enable --now bing-wallpaper.timer
 ```

@@ -51,26 +51,70 @@ The user interface is built on these two open-source projects:
 
 Thanks to both projects. All other libraries are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-## Build
+## Installation
 
-The gpui crates used by gpui-kit cannot be built with rustc 1.93 that ships with Ubuntu 26.04. Install a newer stable toolchain with rustup.
-`.cargo/config.toml` points cargo at `scripts/rustc-stable`, which runs the rustc of your rustup stable toolchain, so Ubuntu’s own `cargo` works as is. Without rustup, the `rustc` on your PATH is used.
+### Requirements
+
+- Ubuntu with the GNOME desktop (developed on Ubuntu 26.04; Wayland and X11). The wallpaper is set through GNOME’s `gsettings`
+- A graphics driver with Vulkan support (included in a normal Ubuntu desktop install)
+
+### 1. Install the build tools
 
 ```sh
-# If you don't have rustup yet (no PATH change needed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-
-cargo run --release
+sudo apt install git curl build-essential
 ```
 
-## Install
+A C compiler (`build-essential`) is needed because one of the font libraries is built from C sources.
 
-`scripts/install.sh` builds the app (if needed) and installs the binary, icon and desktop entry under `~/.local`. The app then appears as *Bing Wallpaper* in the GNOME app grid, and its window gets the app icon.
+### 2. Install Rust
+
+Install the current stable Rust with [rustup](https://rustup.rs). The Rust packaged with Ubuntu 26.04 (1.93) is too old for GPUI.
 
 ```sh
-scripts/install.sh               # install to ~/.local
-PREFIX=/path scripts/install.sh  # install somewhere else
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"   # or open a new terminal
+```
+
+If you prefer to keep Ubuntu’s own `cargo` on your PATH, that works too: `.cargo/config.toml` points cargo at `scripts/rustc-stable`, which runs the rustc of your rustup stable toolchain (and falls back to the `rustc` on your PATH when rustup is not installed).
+
+### 3. Get the source
+
+```sh
+git clone https://github.com/TomoyukiNakama/bing-wallpaper-manager.git
+cd bing-wallpaper-manager
+```
+
+### 4. Build and install
+
+```sh
+scripts/install.sh
+```
+
+This builds the release version and installs the app, its icon and a desktop entry under `~/.local`. *Bing Wallpaper* then appears in the GNOME app grid (log out and back in if it does not show up right away), and `bing-wallpaper-manager` can be started from a terminal if `~/.local/bin` is on your PATH. The first build downloads and compiles all dependencies and takes several minutes.
+
+To install somewhere else, set `PREFIX`, for example `PREFIX=/opt/bing-wallpaper scripts/install.sh`.
+
+### Update
+
+```sh
+git pull
+scripts/install.sh
+```
+
+`scripts/install.sh` always rebuilds before installing, so running it again after `git pull` installs the new version.
+
+### Uninstall
+
+```sh
 scripts/install.sh --uninstall
+```
+
+This removes the app, icon and desktop entry. Your settings (`~/.config/bing-wallpaper-manager/`) and saved photos (the storage folder) are kept; delete them yourself if you no longer need them.
+
+### Run without installing
+
+```sh
+cargo run --release
 ```
 
 ## Storage
@@ -122,8 +166,9 @@ Persistent=true
 WantedBy=timers.target
 ```
 
+The timer runs the app installed by `scripts/install.sh` (`~/.local/bin/bing-wallpaper-manager`).
+
 ```sh
-install -Dm755 target/release/bing-wallpaper-manager ~/.local/bin/bing-wallpaper-manager
 systemctl --user daemon-reload
 systemctl --user enable --now bing-wallpaper.timer
 ```

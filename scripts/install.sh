@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # アプリ・アイコン・デスクトップ項目をユーザーの領域（既定 ~/.local）に入れる。
 # GNOME のアプリ一覧に「Bing 壁紙」が出るようになり、ウィンドウにもアイコンが付く。
+# 毎回 cargo build --release してから入れるので、git pull のあとに実行すれば更新になる。
 #
 # 使い方: scripts/install.sh            # ~/.local に入れる
 #         PREFIX=/path scripts/install.sh
@@ -19,9 +20,13 @@ if [[ ${1:-} == --uninstall ]]; then
     exit 0
 fi
 
-if [[ ! -x target/release/$APP ]]; then
-    cargo build --release
+# 毎回ビルドする（git pull 後に古いバイナリを入れないため。変更が無ければすぐ終わる）
+if ! command -v cargo >/dev/null; then
+    echo "cargo が見つかりません。README.ja.md の「Rust を入れる」の手順で Rust をインストールしてください。" >&2
+    echo "cargo not found. Install Rust as described under \"Install Rust\" in README.md." >&2
+    exit 1
 fi
+cargo build --release
 
 install -Dm755 "target/release/$APP" "$PREFIX/bin/$APP"
 install -Dm644 "assets/$APP.desktop" "$PREFIX/share/applications/$APP.desktop"
