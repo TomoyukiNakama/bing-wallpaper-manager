@@ -167,6 +167,11 @@ impl Library {
         self.dir.join(".bing-wallpaper").join("previews").join(format!("{key}.jpg"))
     }
 
+    /// 壁紙用の画像のパス（ファイルがあるかは確かめない。描画中の判定など、頻繁に呼ぶところで使う）。
+    pub fn image_path_unchecked(&self, image: &StoredImage) -> Option<PathBuf> {
+        Some(self.dir.join(image.image_file.as_ref()?))
+    }
+
     pub fn image_path(&self, image: &StoredImage) -> Option<PathBuf> {
         let path = self.dir.join(image.image_file.as_ref()?);
         path.is_file().then_some(path)

@@ -13,7 +13,6 @@ mod settings;
 mod theme;
 mod wallpaper;
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -62,8 +61,30 @@ fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
-/// 「過去の写真」を一度に表示する枚数。
-const PAST_PAGE: usize = 48;
+/// 一覧のタイルの幅と間隔（行の組み立てに使う）。
+const TILE_WIDTH: f32 = 220.;
+const TILE_GAP: f32 = 16.;
+const GROUP_GAP: f32 = 32.;
+/// 一覧の左右の余白（px_8）とスクロールバーの分。
+const LIST_SIDE_PADDING: f32 = 64. + 12.;
+
+/// 一覧（仮想リスト）の 1 項目。gpui の list が、見えている項目だけを描く。
+/// 写真が数百枚あっても、スクロールのたびに描くのは画面に入る数行だけになる。
+#[derive(Clone, PartialEq, Hash)]
+enum ListItem {
+    /// 今日の写真
+    Today,
+    /// 「過去の写真」の見出し（枚数）
+    PastHeading(usize),
+    /// 検索結果の見出し（件数）
+    ResultsHeading(usize),
+    /// 日付ごとのまとまりを横に並べた 1 行（日付, 写真のキー）
+    Groups(Vec<(String, Vec<String>)>),
+    /// 色で探したときの 1 行（写真のキー。その色が多い順）
+    Tiles(Vec<String>),
+    /// 「さらに古い写真を読み込む」
+    LoadOlder,
+}
 /// 「さらに古い写真を読み込む」で一度に読み込む日数。
 const OLDER_DAYS: usize = 30;
 /// タイトルバーとフッターの高さの合計（大きな写真の高さの計算用）。
@@ -114,6 +135,8 @@ struct Dashboard {
     config: Config,
     library: Library,
     stored: Vec<StoredImage>,
+    /// stored の索引（キー → 位置）。写真が数百枚あっても描画中の検索を速くするため
+    stored_index: HashMap<String, usize>,
     latest: Vec<MarketLatest>,
     /// 大きく表示している写真のキー（None なら今日の最初の写真）
     selected: Option<String>,
@@ -126,7 +149,6 @@ struct Dashboard {
     progress: SharedString,
     status: SharedString,
     is_error: bool,
-    past_limit: usize,
     /// アーカイブの一覧（最初に「さらに古い写真を読み込む」を押したときに取得）
     archive: Option<Rc<Vec<ArchivePhoto>>>,
     loading_older: bool,
@@ -135,10 +157,11 @@ struct Dashboard {
     /// 中サイズの画像を取得中（または取得を試みた）写真
     previews_pending: HashSet<String>,
     focus_handle: FocusHandle,
-    /// 一覧のスクロール位置（キーボードで選んだ写真を見える位置に動かすため自前で持つ）
-    list_scroll: ScrollHandle,
-    /// 前回描画したときの各タイルの位置
-    tile_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+    /// 一覧（仮想リスト）の状態と、今の項目
+    list_state: ListState,
+    list_items: Vec<ListItem>,
+    /// 項目を作り直す必要があるか判断するための、前回の項目の要約
+    list_signature: u64,
     /// 「写真全体を表示」などで余った部分に GNOME が塗る色（設定画面のプレビュー用）
     margin_color: Hsla,
     /// 検索欄と検索条件
@@ -146,8 +169,6 @@ struct Dashboard {
     query: Query,
     /// 色見本の帯を出しているか（検索欄を使い始めたら出し、閉じるまで出したまま）
     search_open: bool,
-    /// 検索結果を一度に表示する枚数
-    results_limit: usize,
     /// 保存済みの写真にアーカイブの解説文を補ったか / 補っている最中か
     descriptions_ready: bool,
     indexing: bool,
@@ -163,6 +184,8 @@ struct Dashboard {
     hero_collapsed: bool,
     /// 高さのアニメーション（開始の高さ, 終了の高さ, 識別番号）
     hero_height: (f32, f32, usize),
+    /// 高さのアニメーションを始めた時刻（アニメーション中は細い帯の切り替えをしない）
+    hero_height_changed: Option<std::time::Instant>,
     _appearance: Subscription,
     _search_events: Subscription,
 }
@@ -211,10 +234,21 @@ impl Dashboard {
         window.focus(&focus_handle, cx);
         let mut this = Self {
             focus_handle,
-            list_scroll: ScrollHandle::new(),
-            tile_bounds: Rc::default(),
+            list_state: {
+                let state = ListState::new(0, ListAlignment::Top, px(800.));
+                state.set_scroll_handler(
+                    // リストの状態を借りている最中に呼ばれるので、位置の確認はそのあとで行う
+                    cx.listener(|_, _: &ListScrollEvent, window, cx| {
+                        cx.defer_in(window, |this, _, cx| this.on_list_scrolled(cx));
+                    }),
+                );
+                state
+            },
+            list_items: Vec::new(),
+            list_signature: 0,
             margin_color: wallpaper::primary_color().map(|c| rgb(c).into()).unwrap_or(black()),
-            stored: library.load_all(),
+            stored: Vec::new(),
+            stored_index: HashMap::new(),
             config,
             library,
             latest: MARKETS
@@ -230,7 +264,6 @@ impl Dashboard {
             progress: "".into(),
             status: "".into(),
             is_error: false,
-            past_limit: PAST_PAGE,
             archive: None,
             loading_older: false,
             older_exhausted: false,
@@ -238,7 +271,6 @@ impl Dashboard {
             search_input,
             query: Query::default(),
             search_open: false,
-            results_limit: PAST_PAGE,
             descriptions_ready: false,
             indexing: false,
             analyzing_colors: false,
@@ -247,9 +279,11 @@ impl Dashboard {
             hero_swap: 0,
             hero_collapsed: false,
             hero_height: (0., 0., 0),
+            hero_height_changed: None,
             _appearance: appearance,
             _search_events: search_events,
         };
+        this.set_stored(this.library.load_all());
         this.refresh(cx);
         this.analyze_missing_colors(cx);
         this
@@ -261,22 +295,38 @@ impl Dashboard {
     }
 
     fn find_stored(&self, key: &str) -> Option<&StoredImage> {
-        self.stored.iter().find(|s| s.key == key)
+        self.stored_index.get(key).and_then(|&i| self.stored.get(i))
+    }
+
+    fn set_stored(&mut self, stored: Vec<StoredImage>) {
+        self.stored = stored;
+        self.rebuild_index();
+    }
+
+    fn rebuild_index(&mut self) {
+        self.stored_index = self.stored.iter().enumerate().map(|(i, s)| (s.key.clone(), i)).collect();
     }
 
     fn upsert(&mut self, image: StoredImage) {
-        match self.stored.iter_mut().find(|s| s.key == image.key) {
-            Some(slot) => *slot = image,
+        match self.stored_index.get(&image.key) {
+            Some(&i) => self.stored[i] = image,
             None => {
                 self.stored.push(image);
                 self.stored
                     .sort_by(|a, b| b.startdate.cmp(&a.startdate).then(a.key.cmp(&b.key)));
+                self.rebuild_index();
             }
         }
     }
 
+    /// 写真が保存先に保管済みか（サムネイルは保存処理でメタデータより先に書くので、保管済みならある）。
+    fn has_thumb(&self, key: &str) -> bool {
+        self.stored_index.contains_key(key) || self.library.thumb_path(key).is_file()
+    }
+
     fn is_current(&self, image: &StoredImage) -> bool {
-        match (&self.current_uri, self.library.image_path(image)) {
+        // 描画中に何度も呼ぶので、ファイルの有無は確かめずにパスだけ比べる
+        match (&self.current_uri, self.library.image_path_unchecked(image)) {
             (Some(uri), Some(path)) => *uri == wallpaper::file_uri(&path),
             _ => false,
         }
@@ -321,7 +371,7 @@ impl Dashboard {
             .or_else(|| Some(self.library.thumb_path(&key)).filter(|p| p.is_file()));
         // サムネイルしか無い古い写真も、「壁紙にする」で画像を取得して設定できる
         let can_apply = stored.is_some();
-        let can_open = stored.is_some_and(|s| self.library.image_path(s).is_some());
+        let can_open = stored.is_some_and(|s| s.image_file.is_some());
         let current = stored.is_some_and(|s| self.is_current(s));
 
         if let Some(photo) = today.iter().find(|p| p.key == key) {
@@ -634,7 +684,6 @@ impl Dashboard {
                             Ok(stored) => {
                                 loaded += 1;
                                 this.upsert(stored);
-                                this.past_limit += 1;
                             }
                             Err(err) => eprintln!("archive store failed: {err:#}"),
                         }
@@ -692,8 +741,7 @@ impl Dashboard {
             self.set_status(format!("{err:#}"), true);
         }
         self.library = Library::new(self.config.save_dir());
-        self.stored = self.library.load_all();
-        self.past_limit = PAST_PAGE;
+        self.set_stored(self.library.load_all());
         self.older_exhausted = false;
         self.loading_older = false;
         self.generation += 1;
@@ -724,38 +772,81 @@ impl Dashboard {
 
     /// 一覧のスクロール位置に合わせて、大きな写真を細い帯にする（一番上に戻ったら広げる）。
     fn on_list_scrolled(&mut self, cx: &mut Context<Self>) {
-        let collapse = self.list_scroll.offset().y < px(-24.);
+        // 高さが変わっている最中は切り替えない（一覧の大きさが変わり、位置の判定が揺れるため）
+        if self.hero_height_changed.is_some_and(|t| t.elapsed() < HERO_RESIZE) {
+            return;
+        }
+        // 遊びを持たせる: 120px 以上下で細くし、一番上近くまで戻したら広げる
+        let top = self.list_state.logical_scroll_top();
+        let y = if top.item_ix > 0 { px(f32::MAX) } else { top.offset_in_item };
+        let collapse = if self.hero_collapsed { y > px(8.) } else { y > px(120.) };
         if collapse != self.hero_collapsed {
             self.hero_collapsed = collapse;
             cx.notify();
         }
-        self.load_more_if_near_end(cx);
     }
 
-    /// 表示していない保存済みの写真の数（検索中は検索結果のうち表示していない数）。
-    fn hidden_count(&self) -> usize {
-        if self.query.is_active() {
-            search::filter(&self.stored, &self.query).len().saturating_sub(self.results_limit)
-        } else {
-            let today: HashSet<String> = self.today_photos().into_iter().map(|t| t.key).collect();
-            let past = self.stored.iter().filter(|s| !today.contains(&s.key)).count();
-            past.saturating_sub(self.past_limit)
+    /// 写真の並び（日付ごと）を、ウィンドウ幅に収まる行に詰める。
+    fn pack_rows(groups: Vec<(String, Vec<String>)>, width: f32) -> Vec<ListItem> {
+        let per_row = (((width + TILE_GAP) / (TILE_WIDTH + TILE_GAP)).floor() as usize).max(1);
+        let mut rows = Vec::new();
+        let mut row: Vec<(String, Vec<String>)> = Vec::new();
+        let mut row_width = 0.;
+        for (date, keys) in groups {
+            // 1 日の写真が 1 行に収まらないときは分ける
+            for chunk in keys.chunks(per_row) {
+                let w = chunk.len() as f32 * TILE_WIDTH + (chunk.len() as f32 - 1.) * TILE_GAP;
+                if !row.is_empty() && row_width + GROUP_GAP + w > width {
+                    rows.push(ListItem::Groups(std::mem::take(&mut row)));
+                    row_width = 0.;
+                }
+                if !row.is_empty() {
+                    row_width += GROUP_GAP;
+                }
+                row_width += w;
+                row.push((date.clone(), chunk.to_vec()));
+            }
         }
+        if !row.is_empty() {
+            rows.push(ListItem::Groups(row));
+        }
+        rows
     }
 
-    /// 無限スクロール: 一覧の下端に近づいたら（または一覧が画面に収まっていたら）、保存済みの写真の続きを表示する。
-    /// まだダウンロードしていない写真は「さらに古い写真を読み込む」ボタンで取得する。
-    fn load_more_if_near_end(&mut self, cx: &mut Context<Self>) {
-        let remaining_px = self.list_scroll.max_offset().y + self.list_scroll.offset().y;
-        if remaining_px > px(800.) || self.hidden_count() == 0 {
-            return;
+    fn group_by_date<'a>(images: impl Iterator<Item = &'a StoredImage>) -> Vec<(String, Vec<String>)> {
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for s in images {
+            match groups.last_mut() {
+                Some((date, keys)) if *date == s.startdate => keys.push(s.key.clone()),
+                _ => groups.push((s.startdate.clone(), vec![s.key.clone()])),
+            }
         }
+        groups
+    }
+
+    /// 一覧の項目を組み立てる（今日の写真・過去の写真、または検索結果）。
+    fn build_list_items(&self, today: &[TodayPhoto], width: f32) -> Vec<ListItem> {
+        let mut items = Vec::new();
         if self.query.is_active() {
-            self.results_limit += PAST_PAGE;
+            let hits = search::filter(&self.stored, &self.query);
+            items.push(ListItem::ResultsHeading(hits.len()));
+            if self.query.color.is_some() {
+                let per_row = (((width + TILE_GAP) / (TILE_WIDTH + TILE_GAP)).floor() as usize).max(1);
+                let keys: Vec<String> = hits.iter().map(|s| s.key.clone()).collect();
+                items.extend(keys.chunks(per_row).map(|c| ListItem::Tiles(c.to_vec())));
+            } else {
+                items.extend(Self::pack_rows(Self::group_by_date(hits.into_iter()), width));
+            }
         } else {
-            self.past_limit += PAST_PAGE;
+            let today_keys: HashSet<&str> = today.iter().map(|t| t.key.as_str()).collect();
+            let past: Vec<&StoredImage> =
+                self.stored.iter().filter(|s| !today_keys.contains(s.key.as_str())).collect();
+            items.push(ListItem::Today);
+            items.push(ListItem::PastHeading(past.len()));
+            items.extend(Self::pack_rows(Self::group_by_date(past.into_iter()), width));
+            items.push(ListItem::LoadOlder);
         }
-        cx.notify();
+        items
     }
 
     /// 広げたときの大きな写真の高さ（一覧の領域 LIST_MIN_HEIGHT を必ず残す）。
@@ -871,7 +962,6 @@ impl Dashboard {
     }
 
     fn on_query_changed(&mut self, cx: &mut Context<Self>) {
-        self.results_limit = PAST_PAGE;
         if self.query.is_active() {
             self.search_open = true;
             self.ensure_descriptions(cx);
@@ -1071,22 +1161,17 @@ impl Dashboard {
 
     /// 画面に並んでいる順（今日の写真 → 過去の写真）のキー。キーボードでの移動に使う。
     fn ordered_keys(&self) -> Vec<String> {
-        if self.query.is_active() {
-            return search::filter(&self.stored, &self.query)
-                .into_iter()
-                .take(self.results_limit)
-                .map(|s| s.key.clone())
-                .collect();
+        let mut keys = Vec::new();
+        for item in &self.list_items {
+            match item {
+                ListItem::Today => keys.extend(self.today_photos().into_iter().map(|t| t.key)),
+                ListItem::Groups(groups) => {
+                    keys.extend(groups.iter().flat_map(|(_, k)| k.iter().cloned()))
+                }
+                ListItem::Tiles(k) => keys.extend(k.iter().cloned()),
+                _ => {}
+            }
         }
-        let today = self.today_photos();
-        let mut keys: Vec<String> = today.iter().map(|t| t.key.clone()).collect();
-        keys.extend(
-            self.stored
-                .iter()
-                .filter(|s| !today.iter().any(|t| t.key == s.key))
-                .take(self.past_limit)
-                .map(|s| s.key.clone()),
-        );
         keys
     }
 
@@ -1105,22 +1190,15 @@ impl Dashboard {
         self.select(key, cx);
     }
 
-    /// タイルが一覧の表示範囲から外れていれば、見える位置までスクロールする。
+    /// 写真を含む行が一覧の表示範囲に入るようにスクロールする。
     fn ensure_visible(&self, key: &str) {
-        let Some(tile) = self.tile_bounds.borrow().get(key).copied() else { return };
-        let view = self.list_scroll.bounds();
-        let margin = px(24.);
-        let mut offset = self.list_scroll.offset();
-        if tile.bottom() > view.bottom() {
-            offset.y -= tile.bottom() - view.bottom() + margin;
-        } else if tile.top() < view.top() {
-            offset.y += view.top() - tile.top() + margin;
-        } else {
-            return;
-        }
-        let max = self.list_scroll.max_offset().y;
-        offset.y = offset.y.clamp(-max, px(0.));
-        self.list_scroll.set_offset(offset);
+        let ix = self.list_items.iter().position(|item| match item {
+            ListItem::Groups(groups) => groups.iter().any(|(_, k)| k.iter().any(|x| x == key)),
+            ListItem::Tiles(k) => k.iter().any(|x| x == key),
+            _ => false,
+        });
+        // 今日の写真（先頭の項目）なら一番上へ
+        self.list_state.scroll_to_reveal_item(ix.unwrap_or(0));
     }
 
     /// 写真に対する操作のメニュー（右クリックと、大きな写真の「…」ボタンで共通）。
@@ -1444,25 +1522,12 @@ impl Dashboard {
         let thumb = self.library.thumb_path(key);
         let key_owned = key.to_string();
         let can_apply = self.find_stored(key).is_some();
-        let can_open = self.find_stored(key).is_some_and(|s| self.library.image_path(s).is_some());
+        let can_open = self.find_stored(key).is_some_and(|s| s.image_file.is_some());
         let entity = cx.entity().downgrade();
         let menu_key = key.to_string();
         let favorite = self.is_favorite(key);
-        let (bounds_map, bounds_key) = (self.tile_bounds.clone(), key.to_string());
         v_flex()
             .id(id.into())
-            .relative()
-            // 描画位置を記録しておき、キーボードで選んだときのスクロールに使う
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        bounds_map.borrow_mut().insert(bounds_key, bounds);
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full(),
-            )
             .w(px(width))
             .flex_none()
             .gap_1p5()
@@ -1485,7 +1550,7 @@ impl Dashboard {
                             .overflow_hidden()
                             .relative()
                             .bg(p.line)
-                            .when(thumb.is_file(), |el| {
+                            .when(self.has_thumb(key), |el| {
                                 el.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
                             })
                             .when(favorite, |el| {
@@ -1585,101 +1650,131 @@ impl Dashboard {
             })
     }
 
-    fn render_past(&self, today: &[TodayPhoto], p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let today_keys: HashSet<&str> = today.iter().map(|t| t.key.as_str()).collect();
-        let past: Vec<&StoredImage> =
-            self.stored.iter().filter(|s| !today_keys.contains(s.key.as_str())).collect();
-        let total = past.len();
+    /// 写真 1 枚のタイル（キーから）。色で並べたときは日付を添える。
+    fn stored_tile(&self, key: &str, date_caption: bool, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(s) = self.find_stored(key) else { return div().into_any_element() };
+        let caption = if date_caption {
+            bing::date_text(&s.startdate, true)
+        } else {
+            let regions = s.markets.iter().map(|m| bing::market_name(m)).collect::<Vec<_>>();
+            regions_caption(&regions)
+        };
+        self.tile(
+            SharedString::from(format!("tile-{key}")),
+            TILE_WIDTH,
+            key,
+            s.display_title(),
+            caption,
+            self.is_current(s),
+            p,
+            cx,
+        )
+        .into_any_element()
+    }
 
-        // 日付ごとにまとめる（stored は新しい順）
-        let mut groups: Vec<(String, Vec<&StoredImage>)> = Vec::new();
-        for s in past.iter().take(self.past_limit) {
-            match groups.last_mut() {
-                Some((date, items)) if *date == s.startdate => items.push(s),
-                _ => groups.push((s.startdate.clone(), vec![s])),
+    /// 一覧の 1 項目を描く（gpui の list から、見えている項目についてだけ呼ばれる）。
+    fn render_list_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = Palette::current(window);
+        let Some(item) = self.list_items.get(ix).cloned() else { return div().into_any_element() };
+        let only_favorites =
+            self.query.favorites && self.query.color.is_none() && self.query.text.trim().is_empty();
+        let (body, bottom): (AnyElement, f32) = match item {
+            ListItem::Today => {
+                let today = self.today_photos();
+                (self.render_today(&today, p, cx).into_any_element(), 40.)
             }
-        }
-
-        let group_elements: Vec<AnyElement> = groups
-            .into_iter()
-            .map(|(date, items)| {
-                let tiles: Vec<AnyElement> = items
-                    .into_iter()
-                    .map(|s| {
-                        let regions =
-                            s.markets.iter().map(|m| bing::market_name(m)).collect::<Vec<_>>();
-                        self.tile(
-                            SharedString::from(format!("past-{}", s.key)),
-                            220.,
-                            &s.key,
-                            s.display_title(),
-                            regions_caption(&regions),
-                            self.is_current(s),
-                            p,
-                            cx,
-                        )
-                        .into_any_element()
+            ListItem::PastHeading(total) => (
+                v_flex()
+                    .gap_4()
+                    .child(Self::section_heading(
+                        tr!("past.title"),
+                        (total > 0).then(|| tr!("past.count", count = total)),
+                        p,
+                    ))
+                    .when(total == 0, |el| {
+                        el.child(div().text_sm().text_color(p.slate).child(tr!("past.empty")))
+                    })
+                    .into_any_element(),
+                16.,
+            ),
+            ListItem::ResultsHeading(total) => (
+                v_flex()
+                    .gap_4()
+                    .child(if only_favorites {
+                        // お気に入りだけを表示しているときは「お気に入り n 枚」にする
+                        Self::section_heading(tr!("favorite.filter"), Some(tr!("past.count", count = total)), p)
+                    } else {
+                        Self::section_heading(tr!("search.results", count = total), Some(tr!("search.hint")), p)
+                    })
+                    .when(total == 0, |el| {
+                        el.child(div().text_sm().text_color(p.slate).child(if only_favorites {
+                            tr!("favorite.empty")
+                        } else {
+                            tr!("search.no_results")
+                        }))
+                    })
+                    .into_any_element(),
+                16.,
+            ),
+            ListItem::Groups(groups) => {
+                let groups: Vec<AnyElement> = groups
+                    .iter()
+                    .map(|(date, keys)| {
+                        let tiles: Vec<AnyElement> =
+                            keys.iter().map(|k| self.stored_tile(k, false, p, cx)).collect();
+                        // 日付の線は、その日の写真の幅だけ引いて「同じ日」のまとまりを示す
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .pt_1p5()
+                                    .border_t_1()
+                                    .border_color(p.line)
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(p.slate)
+                                    .child(bing::date_text(date, false)),
+                            )
+                            .child(h_flex().gap_4().children(tiles))
+                            .into_any_element()
                     })
                     .collect();
-                // 日付の線は、その日の写真の幅だけ引いて「同じ日」のまとまりを示す
+                (h_flex().items_start().gap_x_8().children(groups).into_any_element(), 24.)
+            }
+            ListItem::Tiles(keys) => {
+                let tiles: Vec<AnyElement> = keys.iter().map(|k| self.stored_tile(k, true, p, cx)).collect();
+                (h_flex().gap_4().children(tiles).into_any_element(), 20.)
+            }
+            ListItem::LoadOlder => (
+                // 保存済みの写真のあとに、まだダウンロードしていない古い写真を読み込むボタン
                 v_flex()
                     .gap_2()
+                    .items_start()
                     .child(
-                        div()
-                            .pt_1p5()
-                            .border_t_1()
-                            .border_color(p.line)
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(p.slate)
-                            .child(bing::date_text(&date, false)),
+                        Button::new("load-older")
+                            .small()
+                            .label(tr!("past.load_older"))
+                            .loading(self.loading_older)
+                            .disabled(self.loading_older || self.older_exhausted)
+                            .on_click(cx.listener(|this, _, _, cx| this.load_older(cx))),
                     )
-                    .child(h_flex().gap_4().children(tiles))
-                    .into_any_element()
-            })
-            .collect();
-
-        let remaining = total.saturating_sub(self.past_limit);
-        v_flex()
-            .gap_4()
-            .child(Self::section_heading(
-                tr!("past.title"),
-                (total > 0).then(|| tr!("past.count", count = total)),
-                p,
-            ))
-            .when(total == 0, |el| {
-                el.child(
-                    div()
-                        .text_sm()
-                        .text_color(p.slate)
-                        .child(tr!("past.empty")),
-                )
-            })
-            .child(h_flex().flex_wrap().items_start().gap_x_8().gap_y_6().children(group_elements))
-            // 保存済みの写真は、下端に近づくと自動で続きを表示する（load_more_if_near_end）。
-            // 手元の写真をすべて表示したら、アーカイブからさらに古い写真を読み込めるようにする
-            .when(remaining == 0, |el| {
-                el.child(
-                    v_flex()
-                        .gap_2()
-                        .items_start()
-                        .child(
-                            Button::new("load-older")
-                                .small()
-                                .label(tr!("past.load_older"))
-                                .loading(self.loading_older)
-                                .disabled(self.loading_older || self.older_exhausted)
-                                .on_click(cx.listener(|this, _, _, cx| this.load_older(cx))),
-                        )
-                        .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(
-                            if self.older_exhausted {
-                                tr!("past.no_older").to_string()
-                            } else {
-                                tr!("past.load_older_note", source = archive::SOURCE_NAME)
-                            },
-                        )),
-                )
-            })
+                    .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(
+                        if self.older_exhausted {
+                            tr!("past.no_older").to_string()
+                        } else {
+                            tr!("past.load_older_note", source = archive::SOURCE_NAME)
+                        },
+                    ))
+                    .into_any_element(),
+                28.,
+            ),
+        };
+        div()
+            .px_8()
+            .when(ix == 0, |el| el.pt_7())
+            .pb(px(bottom))
+            .child(body)
+            .into_any_element()
     }
 
     /// 検索中に一覧の上に出す帯（色見本と、検索を閉じるボタン）。
@@ -1748,89 +1843,6 @@ impl Dashboard {
             )
     }
 
-    /// 検索結果。言葉だけなら日付ごと、色を指定したらその色が多い順に並べる。
-    fn render_results(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let hits = search::filter(&self.stored, &self.query);
-        let total = hits.len();
-        let tile = |s: &StoredImage, cx: &mut Context<Self>| {
-            let regions = s.markets.iter().map(|m| bing::market_name(m)).collect::<Vec<_>>();
-            let caption = if self.query.color.is_some() {
-                // 色で並べたときは日付の見出しが無いので、日付を添える
-                bing::date_text(&s.startdate, true)
-            } else {
-                regions_caption(&regions)
-            };
-            self.tile(
-                SharedString::from(format!("hit-{}", s.key)),
-                220.,
-                &s.key,
-                s.display_title(),
-                caption,
-                self.is_current(s),
-                p,
-                cx,
-            )
-            .into_any_element()
-        };
-        let shown: Vec<&StoredImage> = hits.into_iter().take(self.results_limit).collect();
-        let body: AnyElement = if self.query.color.is_some() {
-            let tiles: Vec<AnyElement> = shown.iter().map(|s| tile(s, cx)).collect();
-            h_flex().flex_wrap().gap_4().children(tiles).into_any_element()
-        } else {
-            let mut groups: Vec<(String, Vec<&StoredImage>)> = Vec::new();
-            for s in &shown {
-                match groups.last_mut() {
-                    Some((date, items)) if *date == s.startdate => items.push(s),
-                    _ => groups.push((s.startdate.clone(), vec![s])),
-                }
-            }
-            let groups: Vec<AnyElement> = groups
-                .into_iter()
-                .map(|(date, items)| {
-                    let tiles: Vec<AnyElement> = items.into_iter().map(|s| tile(s, cx)).collect();
-                    v_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .pt_1p5()
-                                .border_t_1()
-                                .border_color(p.line)
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(p.slate)
-                                .child(bing::date_text(&date, false)),
-                        )
-                        .child(h_flex().gap_4().children(tiles))
-                        .into_any_element()
-                })
-                .collect();
-            h_flex().flex_wrap().items_start().gap_x_8().gap_y_6().children(groups).into_any_element()
-        };
-        v_flex()
-            .gap_4()
-            .child({
-                // お気に入りだけを表示しているときは「お気に入り n 枚」にする
-                let only_favorites =
-                    self.query.favorites && self.query.color.is_none() && self.query.text.trim().is_empty();
-                if only_favorites {
-                    Self::section_heading(tr!("favorite.filter"), Some(tr!("past.count", count = total)), p)
-                } else {
-                    Self::section_heading(tr!("search.results", count = total), Some(tr!("search.hint")), p)
-                }
-            })
-            .when(total == 0, |el| {
-                let only_favorites =
-                    self.query.favorites && self.query.color.is_none() && self.query.text.trim().is_empty();
-                el.child(div().text_sm().text_color(p.slate).child(if only_favorites {
-                    tr!("favorite.empty")
-                } else {
-                    tr!("search.no_results")
-                }))
-            })
-            // 続きは下端に近づくと自動で表示する（load_more_if_near_end）
-            .child(body)
-    }
-
     fn render_footer(&self, p: Palette) -> impl IntoElement {
         let busy = self.refreshing
             || self.loading_older
@@ -1892,19 +1904,31 @@ impl Render for Dashboard {
                 h
             })
         });
-        // 無限スクロール: 描画後の大きさで、下端に近ければ続きを表示する
-        if self.hidden_count() > 0 {
-            let entity = cx.entity().downgrade();
-            window.on_next_frame(move |_, cx| {
-                entity.update(cx, |this, cx| this.load_more_if_near_end(cx)).ok();
-            });
+        // 一覧の項目を組み立て、変わったときだけリストを作り直す（スクロール位置は保つ）
+        let width = f32::from(window.viewport_size().width) - LIST_SIDE_PADDING;
+        let items = self.build_list_items(&today, width);
+        let signature = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            items.hash(&mut h);
+            h.finish()
+        };
+        if signature != self.list_signature {
+            let top = self.list_state.logical_scroll_top();
+            self.list_state.reset(items.len());
+            if top.item_ix < items.len() {
+                self.list_state.scroll_to(top);
+            }
+            self.list_signature = signature;
         }
+        self.list_items = items;
         // 高さ: スクロール中は細い帯、それ以外は広げた高さ。変わったらアニメーションをやり直す
         let target_height =
             if self.hero_collapsed { HERO_COLLAPSED_HEIGHT } else { Self::hero_full_height(window) };
         if self.hero_height.1 != target_height {
             let from = if self.hero_height.2 == 0 { target_height } else { self.hero_height.1 };
             self.hero_height = (from, target_height, self.hero_height.2 + 1);
+            self.hero_height_changed = Some(std::time::Instant::now());
         }
         if let Some(key) = self.shown.clone() {
             self.request_preview(&key, cx);
@@ -1942,35 +1966,15 @@ impl Render for Dashboard {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    // 見えている項目だけを描く仮想リスト
                     .child(
-                        div()
-                            .id("list")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.list_scroll)
-                            // スクロールが反映されたあとの位置で、大きな写真を細くするか決める
-                            .on_scroll(cx.listener(|_, _: &ScrollEvent, window, cx| {
-                                let entity = cx.entity().downgrade();
-                                window.on_next_frame(move |_, cx| {
-                                    entity.update(cx, |this, cx| this.on_list_scrolled(cx)).ok();
-                                });
-                            }))
-                            .child(
-                                v_flex()
-                                    .px_8()
-                                    .py_7()
-                                    .gap_10()
-                                    .map(|el| {
-                                        if self.query.is_active() {
-                                            el.child(self.render_results(p, cx))
-                                        } else {
-                                            el.child(self.render_today(&today, p, cx))
-                                                .child(self.render_past(&today, p, cx))
-                                        }
-                                    }),
-                            ),
+                        list(
+                            self.list_state.clone(),
+                            cx.processor(|this, ix: usize, window, cx| this.render_list_item(ix, window, cx)),
+                        )
+                        .size_full(),
                     )
-                    .vertical_scrollbar(&self.list_scroll)
+                    .vertical_scrollbar(&self.list_state)
                     // スクロールした写真が大きな写真の下端に接して見えないよう、上端を地の色でなじませる
                     .child(
                         div()

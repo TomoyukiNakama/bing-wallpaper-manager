@@ -4,6 +4,7 @@
 #
 # 使い方: scripts/screenshot.sh [出力PNG] [待機秒数] [幅x高さ]
 #   環境変数 BWM_THEME=light|dark で配色を固定できる
+#   環境変数 STORE で保存先を差し替えられる（既定は target/screenshot-fixture/store）
 #   環境変数 ACTIONS に操作を 1 行ずつ書くと、撮影前に順に実行する（座標は論理ピクセル）:
 #     click X Y        X,Y を左クリック
 #     rclick X Y       X,Y を右クリック
@@ -23,8 +24,10 @@ BIN=${BIN:-target/release/bing-wallpaper-manager}
 
 # 撮影用の設定と保存先（画像は再利用するので target/ 以下に残す）
 FIXTURE=$PWD/target/screenshot-fixture
-mkdir -p "$FIXTURE/config/bing-wallpaper-manager" "$FIXTURE/store"
-printf '{"save_dir": "%s"}\n' "$FIXTURE/store" > "$FIXTURE/config/bing-wallpaper-manager/config.json"
+# STORE で保存先を差し替えられる（大量の写真での動作確認など）
+STORE=${STORE:-$FIXTURE/store}
+mkdir -p "$FIXTURE/config/bing-wallpaper-manager" "$STORE"
+printf '{"save_dir": "%s"}\n' "$STORE" > "$FIXTURE/config/bing-wallpaper-manager/config.json"
 
 RUNTIME=$(mktemp -d)
 chmod 700 "$RUNTIME"

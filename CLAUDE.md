@@ -39,6 +39,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    使える操作は `click X Y` / `rclick X Y` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
    `type 英小文字・数字・空白` / `sleep 秒` / `shot PATH`。
    撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
+   写真が多いときの動作（スクロールの重さなど）は、`STORE=<写真が数百枚ある保存先のコピー>` で保存先を差し替えて確かめる
+   （撮影はソフトウェア描画なので、実機より遅い）。
    入力は `tools/vpointer`（常駐する仮想マウス・キーボード）で送る。wlrctl はコマンドごとにマウスを作り直すため、
    アプリに入力が届かないので使わない。座標は先に撮った PNG で確かめてから指定する。
 4. 確認できなかったこと（クリック操作、アニメーションなど）は、そのまま報告に書く。
@@ -74,6 +76,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   サイズを抑えるため、撮った PNG は品質 85 の JPEG にして置く。
 - アイコンは `assets/icons/bing-wallpaper-manager.svg` が元。変えたら `python3 scripts/render-icon.py` で PNG を作り直す。
   ウィンドウの app_id と `.desktop` のファイル名（`bing-wallpaper-manager`）は一致させる（GNOME がアイコンを結び付ける）。
+- 一覧は gpui の `list`（仮想リスト）で、見えている行だけを描く。写真を日付ごとにまとめて、ウィンドウ幅に収まる行（`ListItem`）に詰める。
+  写真が数百枚になるので、描画中に呼ぶ処理でファイルの有無を確かめたり（`is_file`）、全件を線形に探したりしない（`stored_index` を使う）。
 - 検索（`src/search.rs`）は保存済みの写真のメタデータだけを対象にする。解説文は最初の検索時にアーカイブから補い、
   色の割合（`src/colors.rs`）は取得・読み込みのあとにサムネイルから裏で解析する。
 
