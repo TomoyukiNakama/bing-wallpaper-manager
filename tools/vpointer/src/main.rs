@@ -9,7 +9,7 @@
 //!   click         左クリック
 //!   rclick        右クリック
 //!   scroll N      N 段スクロール（正で下、負で上）
-//!   key NAME      キーを押して離す（left / right / up / down / enter / escape / f5 / ctrl-f）
+//!   key NAME      キーを押して離す（left / right / up / down / enter / escape / f5 / ctrl-英字）
 //!   type TEXT     英小文字・数字・空白・ハイフンを入力する
 
 use std::io::{BufRead, Write};
@@ -156,15 +156,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sleep(Duration::from_millis(30));
                 }
             }
-            ["key", "ctrl-f"] => {
+            ["key", name] if name.starts_with("ctrl-") => {
+                // ctrl-英字（ctrl-f、ctrl-d など）
+                let Some(code) = name[5..].chars().next().and_then(char_keycode) else {
+                    eprintln!("不明なキー: {name}");
+                    continue;
+                };
                 const CTRL: u32 = 29;
                 keyboard.key(time(), CTRL, 1);
                 keyboard.modifiers(4, 0, 0, 0); // Control
                 conn.flush()?;
-                keyboard.key(time(), 33, 1);
+                keyboard.key(time(), code, 1);
                 conn.flush()?;
                 sleep(Duration::from_millis(40));
-                keyboard.key(time(), 33, 0);
+                keyboard.key(time(), code, 0);
                 keyboard.key(time(), CTRL, 0);
                 keyboard.modifiers(0, 0, 0, 0);
             }

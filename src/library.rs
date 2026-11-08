@@ -84,6 +84,9 @@ pub struct StoredImage {
     /// 含まれる色の割合（%、colors::ColorBucket::ALL の順）。色で探すのに使う。
     #[serde(default)]
     pub colors: Option<Vec<u8>>,
+    /// お気に入りに登録しているか。
+    #[serde(default)]
+    pub favorite: bool,
     /// 以前の形式（英語版だけを持っていた）。読み込み時だけ使う。
     #[serde(default, skip_serializing)]
     title_en: Option<String>,
@@ -231,6 +234,7 @@ impl Library {
             localized: BTreeMap::new(),
             descriptions: BTreeMap::new(),
             colors: None,
+            favorite: false,
             title_en: None,
             copyright_en: None,
             image_file: None,
@@ -263,6 +267,14 @@ impl Library {
         if with_image && self.image_path(&meta).is_none() {
             meta.image_file = Some(self.download_image(src)?);
         }
+        self.write_meta(&meta)?;
+        Ok(meta)
+    }
+
+    /// お気に入りの登録・解除を保存する。
+    pub fn set_favorite(&self, image: &StoredImage, favorite: bool) -> Result<StoredImage> {
+        let mut meta = self.read_meta(&image.key).unwrap_or_else(|| image.clone());
+        meta.favorite = favorite;
         self.write_meta(&meta)?;
         Ok(meta)
     }

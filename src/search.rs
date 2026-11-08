@@ -4,16 +4,18 @@ use crate::bing;
 use crate::colors::{ColorBucket, MATCH_THRESHOLD};
 use crate::library::StoredImage;
 
-/// 検索条件。言葉はスペース区切りのすべてを含むもの、色はその色を一定以上含むもの。
+/// 検索条件。言葉はスペース区切りのすべてを含むもの、色はその色を一定以上含むもの、
+/// `favorites` はお気に入りだけ。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Query {
     pub text: String,
     pub color: Option<ColorBucket>,
+    pub favorites: bool,
 }
 
 impl Query {
     pub fn is_active(&self) -> bool {
-        !self.text.trim().is_empty() || self.color.is_some()
+        !self.text.trim().is_empty() || self.color.is_some() || self.favorites
     }
 
     fn terms(&self) -> Vec<String> {
@@ -67,6 +69,9 @@ pub fn filter<'a>(images: &'a [StoredImage], query: &Query) -> Vec<&'a StoredIma
     let mut hits: Vec<&StoredImage> = images
         .iter()
         .filter(|image| {
+            if query.favorites && !image.favorite {
+                return false;
+            }
             if let Some(color) = query.color {
                 if color_share(image, color).is_none_or(|share| share < MATCH_THRESHOLD) {
                     return false;
@@ -106,12 +111,18 @@ mod tests {
             image("ペンギン", "南極の氷の上", vec![0, 0, 0, 0, 0, 30, 0, 0, 50, 0]),
             image("紅葉", "Ｋｙｏｔｏ の秋", vec![60, 20, 0, 0, 0, 0, 0, 0, 0, 0]),
         ];
-        let q = |text: &str, color| Query { text: text.into(), color };
+        let q = |text: &str, color| Query { text: text.into(), color, favorites: false };
         assert_eq!(filter(&images, &q("南極", None)).len(), 1);
         // 全角英字・大文字小文字の違いを無視する
         assert_eq!(filter(&images, &q("kyoto", None))[0].title, "紅葉");
         assert_eq!(filter(&images, &q("2026-11-08", None)).len(), 2);
         assert_eq!(filter(&images, &q("", Some(ColorBucket::Red)))[0].title, "紅葉");
         assert!(filter(&images, &q("ペンギン", Some(ColorBucket::Red))).is_empty());
+        // お気に入りだけ
+        let mut images = images;
+        images[1].favorite = true;
+        let favorites = Query { favorites: true, ..Query::default() };
+        assert_eq!(filter(&images, &favorites).len(), 1);
+        assert_eq!(filter(&images, &favorites)[0].title, "紅葉");
     }
 }

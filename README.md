@@ -13,7 +13,8 @@ A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them
 - **Dashboard**: the selected photo is shown large at the top, with *Today’s photos* and *Earlier photos* (grouped by date) below. The large photo stays pinned above the list, shrinks to a slim bar while you scroll, and expands again when you pick a photo. Switching photos crossfades smoothly once the new image has loaded
 - **Today’s photos**: the latest photo from six regions (Japan, United States, United Kingdom, Germany, France, China), grouped by photo with the regions that show it
 - **Set as wallpaper**: sets the GNOME wallpaper for both light and dark styles. The current wallpaper is marked *Current wallpaper*
-- **Earlier photos**: the official Bing API goes back 15 days. For older photos, *Load older photos* at the end of the list loads about a month at a time from a community archive ([Bing-Wallpaper-Archive](https://github.com/npanuhin/Bing-Wallpaper-Archive); the US since 2010, other regions since April 2024). Older photos are saved as thumbnails only; the full image is downloaded when you set it as the wallpaper
+- **Favorites**: mark photos with the ☆ button, the right-click menu or Ctrl+D; favorites get a ★ badge, and the ★ button in the title bar shows only your favorites (can be combined with search)
+- **Earlier photos**: saved photos load continuously as you scroll. The official Bing API goes back 15 days. For older photos, *Load older photos* at the end of the list loads about a month at a time from a community archive ([Bing-Wallpaper-Archive](https://github.com/npanuhin/Bing-Wallpaper-Archive); the US since 2010, other regions since April 2024). Older photos are saved as thumbnails only; the full image is downloaded when you set it as the wallpaper
 - **Search** (Ctrl+F) through saved photos
   - By words: titles, places, descriptions, regions and dates (such as `2026-11-08`). Titles and descriptions are saved in every available language, so “penguin”, “Pinguin” and “ペンギン” all find the same photo
   - By color: pick red, orange, yellow, green, cyan, blue, purple, pink, white or black to list photos with the most of that color first. Can be combined with words
@@ -23,7 +24,7 @@ A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them
 - **Settings** (top right, Ctrl+,): General (language, theme), Wallpaper (fit), Storage, and About (version, license, libraries used)
 - **11 languages**: Japanese, English, Chinese (Simplified / Traditional), Korean, German, French, Spanish, Italian, Portuguese and Russian. *Automatic* follows the OS language (`LANG`). Photo titles and descriptions prefer the version shown in a region that uses the selected language
 - **Theme**: match the system, light or dark
-- **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings
+- **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, Ctrl+D to add or remove a favorite, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings
 - **Command line**: `--apply` sets today’s photo as the wallpaper without opening the window
 
 ## Search

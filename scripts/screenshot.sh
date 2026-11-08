@@ -8,7 +8,7 @@
 #     click X Y        X,Y を左クリック
 #     rclick X Y       X,Y を右クリック
 #     scroll down|up N X Y  X,Y の位置で N 段スクロール
-#     key NAME         キーを押す（left / right / up / down / enter / escape / f5 / ctrl-f）
+#     key NAME         キーを押す（left / right / up / down / enter / escape / f5 / ctrl-英字）
 #     type TEXT        英小文字・数字・空白・ハイフンを入力する
 #     sleep 秒
 #     shot PATH        途中経過を撮影

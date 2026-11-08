@@ -26,7 +26,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    Disableable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _, h_flex,
+    Disableable as _, Selectable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _, h_flex,
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -43,7 +43,7 @@ use theme::Palette;
 
 gpui_kit::actions!(
     bing_wallpaper,
-    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings, FocusSearch, CloseSearch]
+    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings, FocusSearch, CloseSearch, ToggleFavorite]
 );
 
 /// キーボード操作（ダッシュボードにフォーカスがあるとき）。
@@ -57,6 +57,7 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-r", Refresh, ctx),
         KeyBinding::new("ctrl-,", OpenSettings, ctx),
         KeyBinding::new("ctrl-f", FocusSearch, ctx),
+        KeyBinding::new("ctrl-d", ToggleFavorite, ctx),
         KeyBinding::new("escape", CloseSearch, ctx),
     ]
 }
@@ -728,6 +729,33 @@ impl Dashboard {
             self.hero_collapsed = collapse;
             cx.notify();
         }
+        self.load_more_if_near_end(cx);
+    }
+
+    /// 表示していない保存済みの写真の数（検索中は検索結果のうち表示していない数）。
+    fn hidden_count(&self) -> usize {
+        if self.query.is_active() {
+            search::filter(&self.stored, &self.query).len().saturating_sub(self.results_limit)
+        } else {
+            let today: HashSet<String> = self.today_photos().into_iter().map(|t| t.key).collect();
+            let past = self.stored.iter().filter(|s| !today.contains(&s.key)).count();
+            past.saturating_sub(self.past_limit)
+        }
+    }
+
+    /// 無限スクロール: 一覧の下端に近づいたら（または一覧が画面に収まっていたら）、保存済みの写真の続きを表示する。
+    /// まだダウンロードしていない写真は「さらに古い写真を読み込む」ボタンで取得する。
+    fn load_more_if_near_end(&mut self, cx: &mut Context<Self>) {
+        let remaining_px = self.list_scroll.max_offset().y + self.list_scroll.offset().y;
+        if remaining_px > px(800.) || self.hidden_count() == 0 {
+            return;
+        }
+        if self.query.is_active() {
+            self.results_limit += PAST_PAGE;
+        } else {
+            self.past_limit += PAST_PAGE;
+        }
+        cx.notify();
     }
 
     /// 広げたときの大きな写真の高さ（一覧の領域 LIST_MIN_HEIGHT を必ず残す）。
@@ -849,6 +877,42 @@ impl Dashboard {
             self.ensure_descriptions(cx);
         }
         cx.notify();
+    }
+
+    fn is_favorite(&self, key: &str) -> bool {
+        self.find_stored(key).is_some_and(|s| s.favorite)
+    }
+
+    /// お気に入りの登録・解除。画面はすぐ切り替え、保存は裏で行う。
+    fn toggle_favorite(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(image) = self.find_stored(key).cloned() else { return };
+        let favorite = !image.favorite;
+        let mut updated = image.clone();
+        updated.favorite = favorite;
+        self.upsert(updated);
+        cx.notify();
+        let library = self.library.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { library.set_favorite(&image, favorite) })
+                .await;
+            if let Err(err) = result {
+                this.update(cx, |this, cx| {
+                    this.set_status(format!("{err:#}"), true);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// お気に入りだけを表示する／やめる。
+    fn toggle_favorites_filter(&mut self, cx: &mut Context<Self>) {
+        self.query.favorites = !self.query.favorites;
+        self.search_open = self.search_open || self.query.favorites;
+        self.on_query_changed(cx);
     }
 
     fn toggle_color(&mut self, color: ColorBucket, cx: &mut Context<Self>) {
@@ -1066,6 +1130,7 @@ impl Dashboard {
         can_apply: bool,
         can_open: bool,
         current: bool,
+        favorite: bool,
         menu: PopupMenu,
     ) -> PopupMenu {
         let item = |label: String, f: fn(&mut Self, &str, &mut Context<Self>)| {
@@ -1075,10 +1140,12 @@ impl Dashboard {
                 entity.update(cx, |this, cx| f(this, &key, cx)).ok();
             })
         };
+        let favorite_label = if favorite { tr!("favorite.remove") } else { tr!("favorite.add") };
         menu.item(
             item(tr!("action.set_wallpaper"), |this, key, cx| this.apply(key.to_string(), cx))
                 .disabled(!can_apply || current),
         )
+        .item(item(favorite_label, |this, key, cx| this.toggle_favorite(key, cx)).disabled(!can_apply))
         .separator()
         .item(item(tr!("action.open_image"), |this, key, cx| this.reveal(key, true, cx)).disabled(!can_open))
         .item(item(tr!("action.show_in_folder"), |this, key, cx| this.reveal(key, false, cx)).disabled(!can_open))
@@ -1119,6 +1186,15 @@ impl Dashboard {
                                 .loading(self.refreshing)
                                 .disabled(self.refreshing)
                                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        )
+                        .child(
+                            Button::new("show-favorites")
+                                .small()
+                                .ghost()
+                                .icon(if self.query.favorites { IconName::StarFill } else { IconName::Star })
+                                .tooltip(tr!("favorite.show"))
+                                .selected(self.query.favorites)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_favorites_filter(cx))),
                         )
                         .child(
                             Button::new("settings")
@@ -1219,6 +1295,7 @@ impl Dashboard {
             let entity = cx.entity().downgrade();
             let (key, can_apply, can_open, current) =
                 (hero.key.clone(), hero.can_apply, hero.can_open, hero.current);
+            let favorite = self.is_favorite(&key);
             // 写真の上に置くので、「壁紙に設定中」と同じ暗い下地と白い記号にする
             // （ButtonCustomVariant は背景を 20% ほどに薄めて使うため、ここでは直接指定する）
             Button::new("photo-menu")
@@ -1235,8 +1312,32 @@ impl Dashboard {
                 .border_1()
                 .border_color(white().opacity(0.28))
                 .dropdown_menu(move |menu, _, _| {
-                    Self::photo_menu(entity.clone(), key.clone(), can_apply, can_open, current, menu)
+                    Self::photo_menu(entity.clone(), key.clone(), can_apply, can_open, current, favorite, menu)
                 })
+        };
+        let favorite_button = {
+            let favorite = self.is_favorite(&hero.key);
+            let key = hero.key.clone();
+            Button::new("favorite")
+                .icon(
+                    Icon::new(if favorite { IconName::StarFill } else { IconName::Star })
+                        .text_color(if favorite { rgb(0xF2C14E).into() } else { white() }),
+                )
+                .tooltip(format!(
+                    "{}（Ctrl+D）",
+                    if favorite { tr!("favorite.remove") } else { tr!("favorite.add") }
+                ))
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .color(black())
+                        .foreground(white())
+                        .hover(black().opacity(0.75))
+                        .active(black().opacity(0.85)),
+                )
+                .bg(black().opacity(0.55))
+                .border_1()
+                .border_color(white().opacity(0.28))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_favorite(&key, cx)))
         };
         let button = if hero.current {
             // 押せるボタンではなく「状態」なので、無効化したボタン（半透明で読みにくい）にはしない。
@@ -1315,7 +1416,14 @@ impl Dashboard {
                                 )),
                         )),
                 )
-                .child(h_flex().flex_none().gap_2().child(menu_button).child(button)),
+                .child(
+                    h_flex()
+                        .flex_none()
+                        .gap_2()
+                        .when(hero.can_apply, |el| el.child(favorite_button))
+                        .child(menu_button)
+                        .child(button),
+                ),
         ))
     }
 
@@ -1339,6 +1447,7 @@ impl Dashboard {
         let can_open = self.find_stored(key).is_some_and(|s| self.library.image_path(s).is_some());
         let entity = cx.entity().downgrade();
         let menu_key = key.to_string();
+        let favorite = self.is_favorite(key);
         let (bounds_map, bounds_key) = (self.tile_bounds.clone(), key.to_string());
         v_flex()
             .id(id.into())
@@ -1359,7 +1468,7 @@ impl Dashboard {
             .gap_1p5()
             .on_click(cx.listener(move |this, _, _, cx| this.select(key_owned.clone(), cx)))
             .context_menu(move |menu, _, _| {
-                Self::photo_menu(entity.clone(), menu_key.clone(), can_apply, can_open, current, menu)
+                Self::photo_menu(entity.clone(), menu_key.clone(), can_apply, can_open, current, favorite, menu)
             })
             .child(
                 div()
@@ -1374,9 +1483,22 @@ impl Dashboard {
                             .size_full()
                             .rounded(px(4.))
                             .overflow_hidden()
+                            .relative()
                             .bg(p.line)
                             .when(thumb.is_file(), |el| {
                                 el.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
+                            })
+                            .when(favorite, |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .top_1p5()
+                                        .right_1p5()
+                                        .p_1()
+                                        .rounded_full()
+                                        .bg(black().opacity(0.55))
+                                        .child(Icon::new(IconName::StarFill).xsmall().text_color(rgb(0xF2C14E))),
+                                )
                             }),
                     ),
             )
@@ -1534,19 +1656,7 @@ impl Dashboard {
                 )
             })
             .child(h_flex().flex_wrap().items_start().gap_x_8().gap_y_6().children(group_elements))
-            .when(remaining > 0, |el| {
-                el.child(
-                    h_flex().child(
-                        Button::new("more")
-                            .small()
-                            .label(tr!("past.show_more", count = remaining))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.past_limit += PAST_PAGE;
-                                cx.notify();
-                            })),
-                    ),
-                )
-            })
+            // 保存済みの写真は、下端に近づくと自動で続きを表示する（load_more_if_near_end）。
             // 手元の写真をすべて表示したら、アーカイブからさらに古い写真を読み込めるようにする
             .when(remaining == 0, |el| {
                 el.child(
@@ -1607,6 +1717,24 @@ impl Dashboard {
             .border_b_1()
             .border_color(p.line)
             .bg(p.surface)
+            .child({
+                let on = self.query.favorites;
+                h_flex()
+                    .id("favorites-chip")
+                    .gap_1p5()
+                    .px_2()
+                    .py_1()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if on { p.lake } else { p.line })
+                    .when(on, |el| el.bg(p.lake.opacity(0.12)))
+                    .text_xs()
+                    .text_color(if on { p.lake } else { p.ink })
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_favorites_filter(cx)))
+                    .child(Icon::new(if on { IconName::StarFill } else { IconName::Star }).xsmall())
+                    .child(tr!("favorite.filter"))
+            })
+            .child(div().w(px(1.)).h(px(18.)).bg(p.line))
             .child(div().text_xs().text_color(p.slate).child(tr!("search.by_color")))
             .children(swatches)
             .child(div().flex_1())
@@ -1678,27 +1806,29 @@ impl Dashboard {
                 .collect();
             h_flex().flex_wrap().items_start().gap_x_8().gap_y_6().children(groups).into_any_element()
         };
-        let remaining = total.saturating_sub(self.results_limit);
         v_flex()
             .gap_4()
-            .child(Self::section_heading(tr!("search.results", count = total), Some(tr!("search.hint")), p))
+            .child({
+                // お気に入りだけを表示しているときは「お気に入り n 枚」にする
+                let only_favorites =
+                    self.query.favorites && self.query.color.is_none() && self.query.text.trim().is_empty();
+                if only_favorites {
+                    Self::section_heading(tr!("favorite.filter"), Some(tr!("past.count", count = total)), p)
+                } else {
+                    Self::section_heading(tr!("search.results", count = total), Some(tr!("search.hint")), p)
+                }
+            })
             .when(total == 0, |el| {
-                el.child(div().text_sm().text_color(p.slate).child(tr!("search.no_results")))
+                let only_favorites =
+                    self.query.favorites && self.query.color.is_none() && self.query.text.trim().is_empty();
+                el.child(div().text_sm().text_color(p.slate).child(if only_favorites {
+                    tr!("favorite.empty")
+                } else {
+                    tr!("search.no_results")
+                }))
             })
+            // 続きは下端に近づくと自動で表示する（load_more_if_near_end）
             .child(body)
-            .when(remaining > 0, |el| {
-                el.child(
-                    h_flex().child(
-                        Button::new("more-results")
-                            .small()
-                            .label(tr!("past.show_more", count = remaining))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.results_limit += PAST_PAGE;
-                                cx.notify();
-                            })),
-                    ),
-                )
-            })
     }
 
     fn render_footer(&self, p: Palette) -> impl IntoElement {
@@ -1762,6 +1892,13 @@ impl Render for Dashboard {
                 h
             })
         });
+        // 無限スクロール: 描画後の大きさで、下端に近ければ続きを表示する
+        if self.hidden_count() > 0 {
+            let entity = cx.entity().downgrade();
+            window.on_next_frame(move |_, cx| {
+                entity.update(cx, |this, cx| this.load_more_if_near_end(cx)).ok();
+            });
+        }
         // 高さ: スクロール中は細い帯、それ以外は広げた高さ。変わったらアニメーションをやり直す
         let target_height =
             if self.hero_collapsed { HERO_COLLAPSED_HEIGHT } else { Self::hero_full_height(window) };
@@ -1786,6 +1923,11 @@ impl Render for Dashboard {
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| {
+                if let Some(key) = this.shown.clone() {
+                    this.toggle_favorite(&key, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)))
             .font_family(theme::FONT)
             .bg(p.fog)
