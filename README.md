@@ -1,56 +1,73 @@
 # Bing Wallpaper Manager
 
-Ubuntu (GNOME) 用の Bing 壁紙アプリです。Rust と [gpui-kit](https://gpui-kit.com) で作っています。
+**English** | [日本語](README.ja.md)
 
-![Bing Wallpaper Manager のダッシュボード（英語表示・ダークテーマ）](docs/screenshot.png)
+A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them as your GNOME wallpaper. Built with Rust, [GPUI](https://gpui.rs) and [gpui-kit](https://gpui-kit.com).
 
-- **ダッシュボード**: 選んだ写真を上部に大きく表示し、その下に「今日の写真」と「過去の写真」（日付ごと）を並べます
-- 「今日の写真」は 6 地域（日本・米国・英国・ドイツ・フランス・中国）の最新を、同じ写真ごとにまとめて配信地域を添えます
-- 写真をクリックすると上部に大きく表示され、「壁紙にする」で GNOME の壁紙（ライト／ダーク両方）に設定します
-- 配色はシステムのライト／ダークに合わせて切り替わります
-- **過去の写真**: Bing 公式 API で 15 日前までを取得します。さらに古い写真は、一覧の末尾の「さらに古い写真を読み込む」で、有志のアーカイブ（[Bing-Wallpaper-Archive](https://github.com/npanuhin/Bing-Wallpaper-Archive)）から約 1 か月分ずつ読み込めます（米国は 2010 年から、ほかの地域は 2024 年 4 月から）。古い写真はサムネイルだけを保存し、壁紙用の画像は「壁紙にする」ときにダウンロードします
-- **設定ダイアログ**（右上の「設定」、Ctrl+,）: 一般（言語・テーマ）／壁紙（表示方法）／保存先／このアプリについて（バージョン・ライセンス・使用ライブラリ）
-- **多言語対応**: 日本語・英語・中国語（簡体字／繁体字）・韓国語・ドイツ語・フランス語・スペイン語・イタリア語・ポルトガル語・ロシア語の 11 言語。自動のときは OS の言語（`LANG`）に合わせます。写真の見出しと説明は、その言語の地域で配信されたもの（ドイツ語ならドイツ、フランス語ならフランス、中国語（簡体字）なら中国、それ以外は英語圏）を優先して表示します
-- **壁紙の表示方法**（設定の「壁紙」）: 写真とモニターの縦横比が違うときの合わせ方を選べます。モニターの比率でのプレビュー付きです
-  - 画面いっぱいに拡大（既定）／写真全体を表示／引き伸ばす／中央に元の大きさで表示／複数のモニターにまたがる
-  - 今の壁紙がこのアプリの写真なら、選んだ時点で反映されます
-- 写真を右クリック、または大きな写真の「…」から「画像を開く」「フォルダで表示」ができます
-- キーボード操作: ←→ で写真を選ぶ、Enter で壁紙にする、F5 / Ctrl+R で更新、Ctrl+, で設定
-- **保存先**は「設定」の「変更…」で選べます（既定は `~/Pictures/BingWallpaper`、日本語環境では `~/ピクチャ/BingWallpaper`）。設定は `~/.config/bing-wallpaper-manager/config.json` に保存されます
-- 取得した画像（全地域の直近 8 日分）は UHD で保存先に保管されます。同じ写真は地域や配信日が違っても 1 枚だけ保存し、保管済みの画像は再ダウンロードしません。日が変わって最新でなくなった画像は「過去の画像」に並びます
-- `--apply` オプションを付けると、GUI を開かずに今日の画像を壁紙に設定します（保存先は GUI と共通）
+![Bing Wallpaper Manager dashboard (English, dark theme)](docs/screenshot.png)
 
-### 保存先の構成
+## Features
 
-```text
-<保存先>/
-  20261108_OHR.Foo_UHD.jpg            壁紙用の画像
-  .bing-wallpaper/meta/OHR.Foo.json   タイトル・配信地域などのメタデータ
-  .bing-wallpaper/thumbs/OHR.Foo.jpg  ダッシュボード用サムネイル (640x360)
-```
+- **Dashboard**: the selected photo is shown large at the top, with *Today’s photos* and *Earlier photos* (grouped by date) below. The large photo stays pinned while the list scrolls
+- **Today’s photos**: the latest photo from six regions (Japan, United States, United Kingdom, Germany, France, China), grouped by photo with the regions that show it
+- **Set as wallpaper**: sets the GNOME wallpaper for both light and dark styles. The current wallpaper is marked *Current wallpaper*
+- **Earlier photos**: the official Bing API goes back 15 days. For older photos, *Load older photos* at the end of the list loads about a month at a time from a community archive ([Bing-Wallpaper-Archive](https://github.com/npanuhin/Bing-Wallpaper-Archive); the US since 2010, other regions since April 2024). Older photos are saved as thumbnails only; the full image is downloaded when you set it as the wallpaper
+- **Search** (Ctrl+F) through saved photos
+  - By words: titles, places, descriptions, regions and dates (such as `2026-11-08`). Titles and descriptions are saved in every available language, so “penguin”, “Pinguin” and “ペンギン” all find the same photo
+  - By color: pick red, orange, yellow, green, cyan, blue, purple, pink, white or black to list photos with the most of that color first. Can be combined with words
+  - Press Escape to close the search
+- **Fit**: choose how the photo fits when its shape differs from the monitor, with a preview in the monitor’s proportions (zoom, show the whole photo, stretch, center at original size, span across monitors)
+- **Photo actions**: right-click a photo or use the *…* button on the large photo to set it as the wallpaper, open the image, or show it in its folder
+- **Settings** (top right, Ctrl+,): General (language, theme), Wallpaper (fit), Storage, and About (version, license, libraries used)
+- **11 languages**: Japanese, English, Chinese (Simplified / Traditional), Korean, German, French, Spanish, Italian, Portuguese and Russian. *Automatic* follows the OS language (`LANG`). Photo titles and descriptions prefer the version shown in a region that uses the selected language
+- **Theme**: match the system, light or dark
+- **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings
+- **Command line**: `--apply` sets today’s photo as the wallpaper without opening the window
 
-## ビルド
+## Built with
 
-gpui-kit が依存する gpui は、Ubuntu 26.04 標準の rustc 1.93 ではビルドできません。rustup で新しい stable を入れてください。
-`.cargo/config.toml` で rustc を rustup の stable に固定しているので、`cargo` 自体は Ubuntu 標準のままで構いません。
+The user interface is built on these two open-source projects:
+
+- **[GPUI](https://gpui.rs)** — the GPU-accelerated UI framework developed by [Zed Industries](https://zed.dev) for the Zed editor ([source](https://github.com/zed-industries/zed), Apache-2.0). This app uses the snapshot published on crates.io as `gpui-pre`
+- **[gpui-kit](https://gpui-kit.com)** — a component library and toolkit for GPUI by [Longbridge](https://github.com/longbridge) ([source](https://github.com/longbridge/gpui-kit), Apache-2.0). The buttons, dialogs, menus, inputs, selects, scrollbars, title bar and theming come from its `gpui-component` and `gpui-base` crates
+
+Thanks to both projects. All other libraries are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Build
+
+The gpui crates used by gpui-kit cannot be built with rustc 1.93 that ships with Ubuntu 26.04. Install a newer stable toolchain with rustup.
+`.cargo/config.toml` pins rustc to the rustup stable toolchain, so Ubuntu’s own `cargo` works as is.
 
 ```sh
-# rustup が無い場合（PATH の変更は不要）
+# If you don't have rustup yet (no PATH change needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
 
 cargo run --release
 ```
 
-`.cargo/config.toml` の rustc のパスは `/home/tn/...` 固定です。別のユーザーや別のマシンでビルドするときは書き換えてください。
+The rustc path in `.cargo/config.toml` is fixed to `/home/tn/...`. Change it when building as another user or on another machine.
 
-## コマンドラインで使う
+## Storage
 
-```sh
-bing-wallpaper-manager --apply              # ja-JP の今日の画像を設定
-bing-wallpaper-manager --apply --mkt en-US  # 地域を指定
+Choose the storage folder under *Settings → Storage* (default: `~/Pictures/BingWallpaper`, or the localized Pictures folder). Settings are saved to `~/.config/bing-wallpaper-manager/config.json`.
+A photo is saved only once even if it is shown in several regions or on different days, and saved images are never downloaded again.
+
+```text
+<storage folder>/
+  20261108_OHR.Foo_UHD.jpg              Wallpaper image (UHD)
+  .bing-wallpaper/meta/OHR.Foo.json     Metadata: titles, descriptions, regions, color shares
+  .bing-wallpaper/thumbs/OHR.Foo.jpg    Thumbnail (640x360)
+  .bing-wallpaper/previews/OHR.Foo.jpg  Medium-size image for showing older photos large (1920x1080)
 ```
 
-### 毎日自動で更新する（systemd user timer）
+## Command line
+
+```sh
+bing-wallpaper-manager --apply              # Set today's ja-JP photo as the wallpaper
+bing-wallpaper-manager --apply --mkt en-US  # Choose the region
+```
+
+### Update every day (systemd user timer)
 
 `~/.config/systemd/user/bing-wallpaper.service`:
 
@@ -85,53 +102,59 @@ systemctl --user daemon-reload
 systemctl --user enable --now bing-wallpaper.timer
 ```
 
-## 見た目の確認（スクリーンショット）
+## Development
 
-仮想の Wayland ディスプレイ（sway の headless モード）でアプリを動かし、PNG を撮ります。
-今のデスクトップ・設定・保存先には触れません（撮影用の設定と画像は `target/screenshot-fixture/` に置かれます）。
+### Screenshots
+
+`scripts/screenshot.sh` runs the app on a virtual Wayland display (sway in headless mode) and saves a PNG.
+It does not touch your desktop, settings, storage folder or wallpaper (screenshot data lives in `target/screenshot-fixture/`).
 
 ```sh
-sudo apt install sway grim          # 初回のみ
+sudo apt install sway grim          # first time only
 cargo build --release
-scripts/screenshot.sh target/shot.png            # 既定: 15 秒待って 1440x960 で撮影
-BWM_THEME=dark scripts/screenshot.sh target/dark.png 10 1280x1300
+scripts/screenshot.sh target/shot.png            # default: wait 15 s, 1440x960
+BWM_THEME=dark BWM_LANG=de scripts/screenshot.sh target/dark.png 10 1280x1300
 ```
 
-`BWM_THEME=light|dark` で配色を、`BWM_LANG=de` などで表示言語を固定できます（通常の起動でも使えます）。
+`BWM_THEME=light|dark` fixes the theme and `BWM_LANG=de` (etc.) fixes the language; both also work in a normal launch.
 
-`ACTIONS` にクリック・右クリック・スクロール・キー入力を書くと、撮影前に操作できます。仮想マウスと仮想キーボードには `tools/vpointer`（初回に自動でビルド）を使います。撮影中の壁紙設定はメモリ上の仮の保存先に書かれ、実際の壁紙は変わりません。
+Put clicks, right-clicks, scrolling, keys and typing in `ACTIONS` to interact before the screenshot. Input is sent through a virtual mouse and keyboard in `tools/vpointer` (built automatically on first use).
 
 ```sh
-ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' \
+ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
   scripts/screenshot.sh target/step2.png 10 1280x1000
 ```
 
-## 構成
+### Translations
 
-| ファイル | 役割 |
+Strings live in `locales/<language>.yml` (`ja`, `en`, `zh-CN`, `zh-TW`, `ko`, `de`, `fr`, `es`, `it`, `pt-BR`, `ru`).
+
+- Write placeholders as `%{count}`
+- Every file must have the same keys (`cargo test` checks this). Missing translations fall back to English
+- To add a language, add a file under `locales/` and a variant to `Language` in `src/i18n.rs`
+
+### Layout
+
+| File | Role |
 | --- | --- |
-| `src/main.rs` | gpui-kit のダッシュボード UI と CLI |
-| `src/bing.rs` | Bing の HPImageArchive API、画像ダウンロード |
-| `src/library.rs` | 保存先への画像の保管と読み込み |
-| `src/config.rs` | 設定ファイル（保存先） |
-| `src/theme.rs` | 配色（ライト／ダーク）とフォント |
-| `src/settings.rs` | 設定ダイアログ（一般・壁紙・保存先・このアプリについて） |
-| `src/i18n.rs` | 表示言語の切り替え・日付の書式（文言は `tr!("キー")` で参照） |
-| `locales/*.yml` | 翻訳ファイル（言語ごと。rust-i18n でビルド時に埋め込み） |
-| `src/archive.rs` | 有志のアーカイブからの古い写真の一覧 |
-| `src/third_party.tsv` / `THIRD_PARTY_LICENSES.md` | 使用ライブラリの一覧（`scripts/gen-third-party.py` で生成） |
-| `scripts/screenshot.sh` | 仮想ディスプレイでのスクリーンショット撮影 |
-| `tools/vpointer/` | 撮影時にクリック・スクロールを送る仮想マウス（別プロジェクト） |
-| `src/wallpaper.rs` | `gsettings` による GNOME の壁紙設定 |
+| `src/main.rs` | Dashboard UI and CLI |
+| `src/bing.rs` | Bing HPImageArchive API and downloads |
+| `src/archive.rs` | Older photos and descriptions from the community archive |
+| `src/library.rs` | Saving and loading photos in the storage folder |
+| `src/search.rs` | Search by words and colors |
+| `src/colors.rs` | Color share analysis of photos |
+| `src/settings.rs` | Settings dialog |
+| `src/config.rs` | Settings file |
+| `src/theme.rs` | Colors (light / dark) and font |
+| `src/i18n.rs` | Language switching and date formats (strings are referenced with `tr!("key")`) |
+| `src/wallpaper.rs` | Setting the GNOME wallpaper with `gsettings` |
+| `locales/*.yml` | Translations (embedded at build time with rust-i18n) |
+| `src/third_party.tsv` / `THIRD_PARTY_LICENSES.md` | Libraries used (generated by `scripts/gen-third-party.py`) |
+| `scripts/screenshot.sh` | Screenshots on a virtual display |
+| `tools/vpointer/` | Virtual mouse and keyboard for screenshots (separate crate) |
 
-## 翻訳
+## License
 
-文言は `locales/<言語>.yml` にあります（`ja`、`en`、`zh-CN`、`zh-TW`、`ko`、`de`、`fr`、`es`、`it`、`pt-BR`、`ru`）。
+Licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option (MIT OR Apache-2.0). Libraries used are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) (regenerate with `python3 scripts/gen-third-party.py` after changing dependencies).
 
-- 値の差し込みは `%{count}` の形で書きます
-- すべてのファイルに同じキーが必要です（`cargo test` で確認されます）。訳が無いキーは英語で表示されます
-- 言語を追加するときは、`locales/` にファイルを足し、`src/i18n.rs` の `Language` に追加します
-
-## ライセンス
-
-[MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) のどちらかを選んで利用できます（MIT OR Apache-2.0）。使用しているライブラリの一覧は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) にあります（依存を変えたら `python3 scripts/gen-third-party.py` で作り直す）。
+Photos are copyrighted by their photographers and providers. This app is not affiliated with Microsoft.

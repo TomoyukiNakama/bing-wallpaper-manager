@@ -9,7 +9,8 @@
 //!   click         左クリック
 //!   rclick        右クリック
 //!   scroll N      N 段スクロール（正で下、負で上）
-//!   key NAME      キーを押して離す（left / right / up / down / enter / escape / f5）
+//!   key NAME      キーを押して離す（left / right / up / down / enter / escape / f5 / ctrl-f）
+//!   type TEXT     英小文字・数字・空白・ハイフンを入力する
 
 use std::io::{BufRead, Write};
 use std::os::fd::AsFd;
@@ -59,6 +60,21 @@ const KEYMAP: &str = r#"xkb_keymap {
   xkb_symbols { include "pc+us+inet(evdev)" };
 };
 "#;
+
+/// 文字 → evdev のキーコード（US 配列、英小文字・数字・空白・ハイフンのみ）。
+fn char_keycode(c: char) -> Option<u32> {
+    const LETTERS: [u32; 26] = [
+        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, 21, 44,
+    ];
+    Some(match c {
+        'a'..='z' => LETTERS[(c as u8 - b'a') as usize],
+        '1'..='9' => 2 + (c as u8 - b'1') as u32,
+        '0' => 11,
+        ' ' => 57,
+        '-' => 12,
+        _ => return None,
+    })
+}
 
 /// evdev のキーコード。
 fn keycode(name: &str) -> Option<u32> {
@@ -138,6 +154,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pointer.frame();
                     conn.flush()?;
                     sleep(Duration::from_millis(30));
+                }
+            }
+            ["key", "ctrl-f"] => {
+                const CTRL: u32 = 29;
+                keyboard.key(time(), CTRL, 1);
+                keyboard.modifiers(4, 0, 0, 0); // Control
+                conn.flush()?;
+                keyboard.key(time(), 33, 1);
+                conn.flush()?;
+                sleep(Duration::from_millis(40));
+                keyboard.key(time(), 33, 0);
+                keyboard.key(time(), CTRL, 0);
+                keyboard.modifiers(0, 0, 0, 0);
+            }
+            ["type", ..] => {
+                let text = line.trim_start().strip_prefix("type").unwrap_or("").trim_start();
+                for c in text.chars() {
+                    let Some(code) = char_keycode(c) else { continue };
+                    keyboard.key(time(), code, 1);
+                    conn.flush()?;
+                    sleep(Duration::from_millis(25));
+                    keyboard.key(time(), code, 0);
+                    conn.flush()?;
+                    sleep(Duration::from_millis(25));
                 }
             }
             ["key", name] => {

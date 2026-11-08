@@ -8,7 +8,8 @@
 #     click X Y        X,Y を左クリック
 #     rclick X Y       X,Y を右クリック
 #     scroll down|up N X Y  X,Y の位置で N 段スクロール
-#     key NAME         キーを押す（left / right / up / down / enter / escape / f5）
+#     key NAME         キーを押す（left / right / up / down / enter / escape / f5 / ctrl-f）
+#     type TEXT        英小文字・数字・空白・ハイフンを入力する
 #     sleep 秒
 #     shot PATH        途中経過を撮影
 #   必要なもの: sway, grim（ACTIONS では tools/vpointer を自動でビルドして使う）
@@ -109,6 +110,9 @@ if [[ -n ${ACTIONS:-} ]]; then
             key)
                 echo "key $a" >&3
                 sleep 0.5 ;;
+            type)
+                echo "type $a${b:+ $b}${c:+ $c}${d:+ $d}" >&3
+                sleep 1 ;;
             sleep) sleep "$a" ;;
             shot) shot "$a"; echo "保存しました: $a" ;;
             *) echo "不明な操作: $cmd" >&2; exit 1 ;;

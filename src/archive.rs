@@ -21,6 +21,7 @@ struct Entry {
     caption: Option<String>,
     copyright: Option<String>,
     date: String,
+    description: Option<String>,
     bing_url: Option<String>,
     url: Option<String>,
 }
@@ -76,6 +77,11 @@ fn to_source(entry: Entry, market: &str) -> Option<PhotoSource> {
         title: entry.caption.clone().unwrap_or_default(),
         copyright: copyright.clone(),
         localized: vec![(market.to_string(), entry.caption.clone().unwrap_or_default(), copyright.clone())],
+        descriptions: entry
+            .description
+            .filter(|d| !d.is_empty())
+            .map(|d| vec![(market.to_string(), d)])
+            .unwrap_or_default(),
         urlbase,
         mirror_url: entry.url,
     })
@@ -125,6 +131,7 @@ pub fn fetch_all() -> (Vec<ArchivePhoto>, Vec<anyhow::Error>) {
                             }
                             // 地域ごとの見出しと説明をまとめて持つ
                             photo.source.localized.extend(source.localized);
+                            photo.source.descriptions.extend(source.descriptions);
                         }
                         None => {
                             index.insert(source.key.clone(), photos.len());
@@ -151,6 +158,7 @@ mod tests {
             caption: Some("虹を見つける日".into()),
             copyright: Some("© Emad aljumah/Getty Images".into()),
             date: "2024-04-03".into(),
+            description: Some("虹は…".into()),
             bing_url: Some("https://bing.com/th?id=OHR.KyrgyzstanRainbow_JA-JP6458656191_UHD.jpg".into()),
             url: Some("https://bing.npanuhin.me/JP/ja/2024-04-03.jpg".into()),
         };
@@ -169,6 +177,7 @@ mod tests {
             caption: None,
             copyright: None,
             date: "2010-01-01".into(),
+            description: None,
             bing_url: None,
             url: Some("https://bing.npanuhin.me/US/en/2010-01-01.jpg".into()),
         };

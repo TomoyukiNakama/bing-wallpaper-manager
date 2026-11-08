@@ -34,6 +34,8 @@ pub struct PhotoSource {
     pub mirror_url: Option<String>,
     /// 地域ごとの見出しと説明（地域コード, 見出し, 説明）。表示言語に合うものを選ぶ。
     pub localized: Vec<(String, String, String)>,
+    /// 地域ごとの解説文（地域コード, 解説文）。アーカイブにだけある。検索に使う。
+    pub descriptions: Vec<(String, String)>,
 }
 
 impl PhotoSource {
@@ -47,6 +49,7 @@ impl PhotoSource {
             urlbase: img.urlbase.clone(),
             mirror_url: None,
             localized: vec![(market.to_string(), img.title.clone(), img.copyright.clone())],
+            descriptions: Vec::new(),
         }
     }
 
@@ -75,6 +78,12 @@ pub struct StoredImage {
     /// 地域ごとの見出しと説明（地域コード → (見出し, 説明)）。表示言語に合うものを選ぶ。
     #[serde(default)]
     pub localized: BTreeMap<String, (String, String)>,
+    /// 地域ごとの解説文（地域コード → 解説文）。検索に使う。
+    #[serde(default)]
+    pub descriptions: BTreeMap<String, String>,
+    /// 含まれる色の割合（%、colors::ColorBucket::ALL の順）。色で探すのに使う。
+    #[serde(default)]
+    pub colors: Option<Vec<u8>>,
     /// 以前の形式（英語版だけを持っていた）。読み込み時だけ使う。
     #[serde(default, skip_serializing)]
     title_en: Option<String>,
@@ -122,6 +131,7 @@ impl StoredImage {
             urlbase: self.urlbase.clone(),
             mirror_url: self.mirror_url.clone(),
             localized: Vec::new(),
+            descriptions: Vec::new(),
         }
     }
 }
@@ -219,6 +229,8 @@ impl Library {
             mirror_url: src.mirror_url.clone(),
             markets: Vec::new(),
             localized: BTreeMap::new(),
+            descriptions: BTreeMap::new(),
+            colors: None,
             title_en: None,
             copyright_en: None,
             image_file: None,
@@ -241,6 +253,9 @@ impl Library {
         for (market, title, copyright) in &src.localized {
             meta.localized.insert(market.clone(), (title.clone(), copyright.clone()));
         }
+        for (market, description) in &src.descriptions {
+            meta.descriptions.insert(market.clone(), description.clone());
+        }
 
         let thumb_url = src.thumb_url().context(tr!("error.no_image_url"))?;
         bing::download(&thumb_url, &self.thumb_path(&src.key))?;
@@ -248,6 +263,16 @@ impl Library {
         if with_image && self.image_path(&meta).is_none() {
             meta.image_file = Some(self.download_image(src)?);
         }
+        self.write_meta(&meta)?;
+        Ok(meta)
+    }
+
+    /// 色の割合を計算して保存する（サムネイルから）。
+    pub fn analyze_colors(&self, image: &StoredImage) -> Result<StoredImage> {
+        let thumb = self.thumb_path(&image.key);
+        let colors = crate::colors::analyze(&thumb)?;
+        let mut meta = self.read_meta(&image.key).unwrap_or_else(|| image.clone());
+        meta.colors = Some(colors);
         self.write_meta(&meta)?;
         Ok(meta)
     }

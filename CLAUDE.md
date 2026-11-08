@@ -35,7 +35,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    ```sh
    ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' scripts/screenshot.sh target/step2.png 10 1280x1000
    ```
-   使える操作は `click X Y` / `rclick X Y` / `scroll down|up N X Y` / `key left|right|enter|escape|f5` / `sleep 秒` / `shot PATH`。
+   使える操作は `click X Y` / `rclick X Y` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
+   `type 英小文字・数字・空白` / `sleep 秒` / `shot PATH`。
    撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
    入力は `tools/vpointer`（常駐する仮想マウス・キーボード）で送る。wlrctl はコマンドごとにマウスを作り直すため、
    アプリに入力が届かないので使わない。座標は先に撮った PNG で確かめてから指定する。
@@ -67,3 +68,6 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 - 設定ダイアログ（SettingsView）は Dashboard の更新中に作られる。`SettingsView::new` の中で Dashboard を read しない（パニックする）。
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。
+- README は英語版（`README.md`、GitHub の既定）と日本語版（`README.ja.md`）の 2 つ。機能を変えたら両方を同じ内容に更新する。
+- 検索（`src/search.rs`）は保存済みの写真のメタデータだけを対象にする。解説文は最初の検索時にアーカイブから補い、
+  色の割合（`src/colors.rs`）は取得・読み込みのあとにサムネイルから裏で解析する。

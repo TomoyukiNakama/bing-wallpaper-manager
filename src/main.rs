@@ -5,8 +5,10 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod archive;
 mod bing;
+mod colors;
 mod config;
 mod library;
+mod search;
 mod settings;
 mod theme;
 mod wallpaper;
@@ -18,6 +20,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
@@ -32,12 +35,14 @@ use bing::{BingImage, MARKETS};
 use config::{Config, FitMode, Language, ThemePref};
 use archive::ArchivePhoto;
 use library::{Library, PhotoSource, StoredImage};
+use colors::ColorBucket;
+use search::Query;
 use settings::SettingsView;
 use theme::Palette;
 
 gpui_kit::actions!(
     bing_wallpaper,
-    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings]
+    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings, FocusSearch, CloseSearch]
 );
 
 /// キーボード操作（ダッシュボードにフォーカスがあるとき）。
@@ -50,6 +55,8 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("f5", Refresh, ctx),
         KeyBinding::new("ctrl-r", Refresh, ctx),
         KeyBinding::new("ctrl-,", OpenSettings, ctx),
+        KeyBinding::new("ctrl-f", FocusSearch, ctx),
+        KeyBinding::new("escape", CloseSearch, ctx),
     ]
 }
 
@@ -127,7 +134,20 @@ struct Dashboard {
     tile_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     /// 「写真全体を表示」などで余った部分に GNOME が塗る色（設定画面のプレビュー用）
     margin_color: Hsla,
+    /// 検索欄と検索条件
+    search_input: Entity<InputState>,
+    query: Query,
+    /// 色見本の帯を出しているか（検索欄を使い始めたら出し、閉じるまで出したまま）
+    search_open: bool,
+    /// 検索結果を一度に表示する枚数
+    results_limit: usize,
+    /// 保存済みの写真にアーカイブの解説文を補ったか / 補っている最中か
+    descriptions_ready: bool,
+    indexing: bool,
+    /// 色の解析中
+    analyzing_colors: bool,
     _appearance: Subscription,
+    _search_events: Subscription,
 }
 
 fn markets_label(markets: impl IntoIterator<Item = String>) -> String {
@@ -154,6 +174,21 @@ impl Dashboard {
         let library = Library::new(config.save_dir());
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::apply(window, cx);
+        });
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr!("search.placeholder")));
+        let search_events = cx.subscribe_in(&search_input, window, |this, input, event: &InputEvent, _, cx| {
+            match event {
+                InputEvent::Change => {
+                    this.query.text = input.read(cx).value().to_string();
+                    this.on_query_changed(cx);
+                }
+                InputEvent::Focus => {
+                    this.search_open = true;
+                    this.ensure_descriptions(cx);
+                    cx.notify();
+                }
+                _ => {}
+            }
         });
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -183,9 +218,18 @@ impl Dashboard {
             loading_older: false,
             older_exhausted: false,
             previews_pending: HashSet::new(),
+            search_input,
+            query: Query::default(),
+            search_open: false,
+            results_limit: PAST_PAGE,
+            descriptions_ready: false,
+            indexing: false,
+            analyzing_colors: false,
             _appearance: appearance,
+            _search_events: search_events,
         };
         this.refresh(cx);
+        this.analyze_missing_colors(cx);
         this
     }
 
@@ -389,6 +433,7 @@ impl Dashboard {
                     return;
                 }
                 this.refreshing = false;
+                this.analyze_missing_colors(cx);
                 if failures == 0 {
                     this.set_status(tr!("status.refreshed"), false);
                 } else {
@@ -580,6 +625,7 @@ impl Dashboard {
 
             this.update(cx, |this, cx| {
                 this.loading_older = false;
+                this.analyze_missing_colors(cx);
                 if loaded == 0 {
                     this.set_status(
                         tr!("status.older_failed"),
@@ -713,6 +759,8 @@ impl Dashboard {
         i18n::set(language);
         // 状態表示は前の言語で書かれているので消す
         self.set_status("", false);
+        self.search_input
+            .update(cx, |input, cx| input.set_placeholder(tr!("search.placeholder"), window, cx));
         self.save_config(cx);
         window.refresh();
         cx.notify();
@@ -738,6 +786,157 @@ impl Dashboard {
         }
     }
 
+    fn on_query_changed(&mut self, cx: &mut Context<Self>) {
+        self.results_limit = PAST_PAGE;
+        if self.query.is_active() {
+            self.search_open = true;
+            self.ensure_descriptions(cx);
+        }
+        cx.notify();
+    }
+
+    fn toggle_color(&mut self, color: ColorBucket, cx: &mut Context<Self>) {
+        self.query.color = if self.query.color == Some(color) { None } else { Some(color) };
+        self.on_query_changed(cx);
+    }
+
+    fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_open = true;
+        self.search_input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 検索を閉じて、いつもの一覧に戻る。
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_open && !self.query.is_active() {
+            return;
+        }
+        self.search_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.query = Query::default();
+        self.search_open = false;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// 保存済みの写真に、アーカイブの解説文を補う（最初に検索したときに一度だけ）。
+    /// 写真のファイルは取得し直さず、メタデータだけを更新する。
+    fn ensure_descriptions(&mut self, cx: &mut Context<Self>) {
+        if self.descriptions_ready || self.indexing {
+            return;
+        }
+        self.indexing = true;
+        self.progress = tr!("status.indexing").into();
+        cx.notify();
+
+        let generation = self.generation;
+        let library = self.library.clone();
+        let cached = self.archive.clone();
+        let stored_keys: HashSet<String> = self.stored.iter().map(|s| s.key.clone()).collect();
+        cx.spawn(async move |this, cx| {
+            let archive = match cached {
+                Some(archive) => Some(archive),
+                None => {
+                    let (photos, errors) =
+                        cx.background_executor().spawn(async move { archive::fetch_all() }).await;
+                    for err in &errors {
+                        eprintln!("archive: {err:#}");
+                    }
+                    (!photos.is_empty()).then(|| Rc::new(photos))
+                }
+            };
+            let Some(archive) = archive else {
+                this.update(cx, |this, cx| {
+                    this.indexing = false;
+                    this.set_status(tr!("status.indexing_failed"), true);
+                    cx.notify();
+                })
+                .ok();
+                return;
+            };
+            this.update(cx, |this, _| this.archive = Some(archive.clone())).ok();
+
+            let targets: Vec<ArchivePhoto> = archive
+                .iter()
+                .filter(|p| stored_keys.contains(&p.source.key) && !p.source.descriptions.is_empty())
+                .cloned()
+                .collect();
+            let updated = cx
+                .background_executor()
+                .spawn(async move {
+                    targets
+                        .iter()
+                        .filter_map(|p| library.store(&p.source, &p.markets, false).ok())
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.indexing = false;
+                if this.generation != generation {
+                    return;
+                }
+                this.descriptions_ready = true;
+                for image in updated {
+                    this.upsert(image);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// まだ色を解析していない写真を、サムネイルから解析する。
+    fn analyze_missing_colors(&mut self, cx: &mut Context<Self>) {
+        if self.analyzing_colors {
+            return;
+        }
+        let targets: Vec<StoredImage> = self
+            .stored
+            .iter()
+            .filter(|s| s.colors.is_none() && self.library.thumb_path(&s.key).is_file())
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        self.analyzing_colors = true;
+        let generation = self.generation;
+        let library = self.library.clone();
+        let total = targets.len();
+        cx.spawn(async move |this, cx| {
+            for (n, image) in targets.into_iter().enumerate() {
+                let lib = library.clone();
+                let result = cx.background_executor().spawn(async move { lib.analyze_colors(&image) }).await;
+                let ok = this
+                    .update(cx, |this, cx| {
+                        if this.generation != generation {
+                            return false;
+                        }
+                        match result {
+                            Ok(image) => this.upsert(image),
+                            Err(err) => eprintln!("color analysis failed: {err:#}"),
+                        }
+                        this.progress = tr!("status.analyzing_colors", done = n + 1, total = total).into();
+                        // 色で探しているときだけ、結果を描き直す
+                        if this.query.color.is_some() {
+                            cx.notify();
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !ok {
+                    break;
+                }
+            }
+            this.update(cx, |this, cx| {
+                this.analyzing_colors = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// 写真のファイルに対する操作（画像を開く・フォルダで表示）。
     fn reveal(&mut self, key: &str, open: bool, cx: &mut Context<Self>) {
         let Some(path) = self.find_stored(key).and_then(|s| self.library.image_path(s)) else {
@@ -752,6 +951,13 @@ impl Dashboard {
 
     /// 画面に並んでいる順（今日の写真 → 過去の写真）のキー。キーボードでの移動に使う。
     fn ordered_keys(&self) -> Vec<String> {
+        if self.query.is_active() {
+            return search::filter(&self.stored, &self.query)
+                .into_iter()
+                .take(self.results_limit)
+                .map(|s| s.key.clone())
+                .collect();
+        }
         let today = self.today_photos();
         let mut keys: Vec<String> = today.iter().map(|t| t.key.clone()).collect();
         keys.extend(
@@ -836,6 +1042,14 @@ impl Dashboard {
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(p.ink)
                         .child(tr!("app.name")),
+                )
+                .child(
+                    div().w(px(360.)).child(
+                        Input::new(&self.search_input)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).small().text_color(p.slate))
+                            .cleanable(true),
+                    ),
                 )
                 .child(
                     h_flex()
@@ -1266,8 +1480,140 @@ impl Dashboard {
             })
     }
 
+    /// 検索中に一覧の上に出す帯（色見本と、検索を閉じるボタン）。
+    fn render_search_bar(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let swatches = ColorBucket::ALL.iter().enumerate().map(|(i, &color)| {
+            let selected = self.query.color == Some(color);
+            h_flex()
+                .id(("color", i))
+                .gap_1p5()
+                .px_2()
+                .py_1()
+                .rounded_full()
+                .border_1()
+                .border_color(if selected { p.lake } else { p.line })
+                .when(selected, |el| el.bg(p.lake.opacity(0.12)))
+                .text_xs()
+                .text_color(if selected { p.lake } else { p.ink })
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_color(color, cx)))
+                .child(
+                    div()
+                        .size(px(12.))
+                        .rounded_full()
+                        .bg(color.swatch())
+                        .border_1()
+                        .border_color(p.slate.opacity(0.4)),
+                )
+                .child(color.label())
+        });
+        h_flex()
+            .flex_none()
+            .flex_wrap()
+            .gap_2()
+            .px_8()
+            .py_2()
+            .border_b_1()
+            .border_color(p.line)
+            .bg(p.surface)
+            .child(div().text_xs().text_color(p.slate).child(tr!("search.by_color")))
+            .children(swatches)
+            .child(div().flex_1())
+            .child(
+                Button::new("close-search")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Close)
+                    .label(tr!("search.close"))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx))),
+            )
+    }
+
+    /// 検索結果。言葉だけなら日付ごと、色を指定したらその色が多い順に並べる。
+    fn render_results(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let hits = search::filter(&self.stored, &self.query);
+        let total = hits.len();
+        let tile = |s: &StoredImage, cx: &mut Context<Self>| {
+            let regions = s.markets.iter().map(|m| bing::market_name(m)).collect::<Vec<_>>();
+            let caption = if self.query.color.is_some() {
+                // 色で並べたときは日付の見出しが無いので、日付を添える
+                bing::date_text(&s.startdate, true)
+            } else {
+                regions_caption(&regions)
+            };
+            self.tile(
+                SharedString::from(format!("hit-{}", s.key)),
+                220.,
+                &s.key,
+                s.display_title(),
+                caption,
+                self.is_current(s),
+                p,
+                cx,
+            )
+            .into_any_element()
+        };
+        let shown: Vec<&StoredImage> = hits.into_iter().take(self.results_limit).collect();
+        let body: AnyElement = if self.query.color.is_some() {
+            let tiles: Vec<AnyElement> = shown.iter().map(|s| tile(s, cx)).collect();
+            h_flex().flex_wrap().gap_4().children(tiles).into_any_element()
+        } else {
+            let mut groups: Vec<(String, Vec<&StoredImage>)> = Vec::new();
+            for s in &shown {
+                match groups.last_mut() {
+                    Some((date, items)) if *date == s.startdate => items.push(s),
+                    _ => groups.push((s.startdate.clone(), vec![s])),
+                }
+            }
+            let groups: Vec<AnyElement> = groups
+                .into_iter()
+                .map(|(date, items)| {
+                    let tiles: Vec<AnyElement> = items.into_iter().map(|s| tile(s, cx)).collect();
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .pt_1p5()
+                                .border_t_1()
+                                .border_color(p.line)
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(p.slate)
+                                .child(bing::date_text(&date, false)),
+                        )
+                        .child(h_flex().gap_4().children(tiles))
+                        .into_any_element()
+                })
+                .collect();
+            h_flex().flex_wrap().items_start().gap_x_8().gap_y_6().children(groups).into_any_element()
+        };
+        let remaining = total.saturating_sub(self.results_limit);
+        v_flex()
+            .gap_4()
+            .child(Self::section_heading(tr!("search.results", count = total), Some(tr!("search.hint")), p))
+            .when(total == 0, |el| {
+                el.child(div().text_sm().text_color(p.slate).child(tr!("search.no_results")))
+            })
+            .child(body)
+            .when(remaining > 0, |el| {
+                el.child(
+                    h_flex().child(
+                        Button::new("more-results")
+                            .small()
+                            .label(tr!("past.show_more", count = remaining))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.results_limit += PAST_PAGE;
+                                cx.notify();
+                            })),
+                    ),
+                )
+            })
+    }
+
     fn render_footer(&self, p: Palette) -> impl IntoElement {
-        let busy = self.refreshing || self.loading_older;
+        let busy = self.refreshing
+            || self.loading_older
+            || self.indexing
+            || (self.analyzing_colors && self.query.color.is_some());
         let (text, color) = if busy {
             (self.progress.clone(), p.slate)
         } else if self.is_error {
@@ -1317,6 +1663,8 @@ impl Render for Dashboard {
             }))
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)))
             .font_family(theme::FONT)
             .bg(p.fog)
             .text_color(p.ink)
@@ -1324,6 +1672,7 @@ impl Render for Dashboard {
             // 大きな写真は上部に固定し、一覧だけをスクロールさせる。
             // 下の方の写真を選んでも、選んだ写真が常に見える。
             .child(self.render_hero(hero, p, window, cx))
+            .when(self.search_open || self.query.is_active(), |el| el.child(self.render_search_bar(p, cx)))
             .child(
                 div()
                     .relative()
@@ -1340,8 +1689,14 @@ impl Render for Dashboard {
                                     .px_8()
                                     .py_7()
                                     .gap_10()
-                                    .child(self.render_today(&today, p, cx))
-                                    .child(self.render_past(&today, p, cx)),
+                                    .map(|el| {
+                                        if self.query.is_active() {
+                                            el.child(self.render_results(p, cx))
+                                        } else {
+                                            el.child(self.render_today(&today, p, cx))
+                                                .child(self.render_past(&today, p, cx))
+                                        }
+                                    }),
                             ),
                     )
                     .vertical_scrollbar(&self.list_scroll)
