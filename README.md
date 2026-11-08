@@ -134,4 +134,4 @@ ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' \
 
 ## ライセンス
 
-MIT OR Apache-2.0。使用しているライブラリの一覧は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) にあります（依存を変えたら `python3 scripts/gen-third-party.py` で作り直す）。
+[MIT License](LICENSE-MIT) と [Apache License 2.0](LICENSE-APACHE) のどちらかを選んで利用できます（MIT OR Apache-2.0）。使用しているライブラリの一覧は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) にあります（依存を変えたら `python3 scripts/gen-third-party.py` で作り直す）。
