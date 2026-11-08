@@ -6,11 +6,12 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 
 - ユーザーは **素の `cargo`（`/usr/bin/cargo`、Ubuntu 標準 1.93）** で `cargo run` する。PATH に `~/.cargo/bin` は入っていない。
 - gpui-kit が依存する gpui-pre は rustc 1.93 ではビルドできない（`std::hint::cold_path`）。そのため
-  `.cargo/config.toml` で rustc を rustup の stable 本体
-  （`~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc`）に固定している。
-  - **この設定を消したり、`~/.cargo/bin/rustc`（rustup のプロキシ）に変えたりしない。**
-    プロキシにすると、依存クレートに同梱された `rust-toolchain.toml`（1.83 指定など）で
-    クレートごとにコンパイラが切り替わり、`E0514 compiled by an incompatible version of rustc` で壊れる。
+  `.cargo/config.toml` で rustc を `scripts/rustc-stable` にしている。このスクリプトが rustup の stable の rustc 本体
+  （`$RUSTUP_HOME/toolchains/stable-*/bin/rustc`）を探して実行する（無ければ `rustup which`、PATH の rustc の順）。
+  - **rustup のプロキシ（`~/.cargo/bin/rustc`）を直接使うように変えない。**
+    プロキシは依存クレートに同梱された `rust-toolchain.toml`（1.83 指定など）でクレートごとにコンパイラを切り替え、
+    `E0514 compiled by an incompatible version of rustc` で壊れる。
+  - 個人のパス（`/home/...`）を設定ファイルに書かない（リポジトリは public）。
   - `rust-toolchain.toml`（stable）は rustup 版 cargo を使う場合のためのもの。
 - 確認には **ユーザーと同じ cargo を使う**。PATH に `~/.cargo/bin` を足した状態で確認して「動く」と報告しない。
   ```sh
@@ -69,5 +70,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。
 - README は英語版（`README.md`、GitHub の既定）と日本語版（`README.ja.md`）の 2 つ。機能を変えたら両方を同じ内容に更新する。
+  説明用の画像は `docs/` にあり、英語版は英語表示、日本語版は日本語表示（`*.ja.png`）で撮る（`BWM_LANG`、ダークテーマ）。
+- アイコンは `assets/icons/bing-wallpaper-manager.svg` が元。変えたら `python3 scripts/render-icon.py` で PNG を作り直す。
+  ウィンドウの app_id と `.desktop` のファイル名（`bing-wallpaper-manager`）は一致させる（GNOME がアイコンを結び付ける）。
 - 検索（`src/search.rs`）は保存済みの写真のメタデータだけを対象にする。解説文は最初の検索時にアーカイブから補い、
   色の割合（`src/colors.rs`）は取得・読み込みのあとにサムネイルから裏で解析する。

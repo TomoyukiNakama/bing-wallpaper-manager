@@ -1,3 +1,5 @@
+<img src="assets/icons/hicolor/128x128/apps/bing-wallpaper-manager.png" alt="" width="96" align="right">
+
 # Bing Wallpaper Manager
 
 [English](README.md) | **日本語**
@@ -24,6 +26,22 @@ Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用�
 - **キーボード操作**: ←→ で写真を選ぶ、Enter で壁紙にする、F5 / Ctrl+R で更新、Ctrl+F で検索、Ctrl+, で設定
 - **コマンドライン**: `--apply` で GUI を開かずに今日の写真を壁紙にできます
 
+## 検索
+
+**Ctrl+F**（またはタイトルバーの検索欄をクリック）で、保存した写真を探せます。検索中は一覧が条件に合う写真だけになり、写真をクリックすると上部に大きく表示されます。Escape で元の一覧に戻ります。
+
+### 言葉で探す
+
+題名・撮影地・解説文・配信地域・日付（`2026-11-08` など）に含まれる言葉で探します。写真の見出しと解説文は配信されたすべての言語で保存しているので、言語をまたいで見つかります。下の画像は、日本語表示のまま英語の `autumn` で探した例です。日本の題名「秋色の森を水上散歩」などの写真が見つかっています。
+
+![「autumn」で探した例](docs/search-words.ja.png)
+
+### 色で探す
+
+赤・橙・黄・緑・水色・青・紫・ピンク・白・黒の 10 色から選ぶと、その色を多く含む写真から順に並びます。色の割合は、各写真のサムネイルから裏で計算しています。言葉と組み合わせて「mountain ＋ 青」のように探すこともできます。
+
+![青を多く含む写真](docs/search-color.ja.png)
+
 ## 使用している技術
 
 画面は、次の 2 つのオープンソースプロジェクトを使って作っています。
@@ -36,7 +54,7 @@ Bing の日替わり写真を見比べて、GNOME の壁紙にする Ubuntu 用�
 ## ビルド
 
 gpui-kit が依存する gpui は、Ubuntu 26.04 標準の rustc 1.93 ではビルドできません。rustup で新しい stable を入れてください。
-`.cargo/config.toml` で rustc を rustup の stable に固定しているので、`cargo` 自体は Ubuntu 標準のままで構いません。
+`.cargo/config.toml` で cargo が `scripts/rustc-stable` を使うようにしてあり、これが rustup の stable の rustc を探して実行します。そのため `cargo` 自体は Ubuntu 標準のままで構いません。rustup が無い環境では、PATH 上の `rustc` を使います。
 
 ```sh
 # rustup が無い場合（PATH の変更は不要）
@@ -45,7 +63,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-mod
 cargo run --release
 ```
 
-`.cargo/config.toml` の rustc のパスは `/home/tn/...` 固定です。別のユーザーや別のマシンでビルドするときは書き換えてください。
+## インストール
+
+`scripts/install.sh` が（必要ならビルドしてから）アプリ・アイコン・デスクトップ項目を `~/.local` に入れます。GNOME のアプリ一覧に「Bing 壁紙」が出るようになり、ウィンドウにもアイコンが付きます。
+
+```sh
+scripts/install.sh               # ~/.local に入れる
+PREFIX=/path scripts/install.sh  # 別の場所に入れる
+scripts/install.sh --uninstall
+```
 
 ## 保存先
 
@@ -150,6 +176,9 @@ ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
 | `src/wallpaper.rs` | `gsettings` による GNOME の壁紙設定 |
 | `locales/*.yml` | 翻訳ファイル（rust-i18n でビルド時に埋め込み） |
 | `src/third_party.tsv` / `THIRD_PARTY_LICENSES.md` | 使用ライブラリの一覧（`scripts/gen-third-party.py` で生成） |
+| `assets/icons/` | アプリのアイコン（SVG と、`scripts/render-icon.py` で作る PNG） |
+| `assets/bing-wallpaper-manager.desktop` | デスクトップ項目（`scripts/install.sh` が入れる） |
+| `scripts/rustc-stable` | cargo が使う rustc を rustup の stable から選ぶ（「ビルド」参照） |
 | `scripts/screenshot.sh` | 仮想ディスプレイでのスクリーンショット撮影 |
 | `tools/vpointer/` | 撮影時に操作を送る仮想マウス・キーボード（別プロジェクト） |
 

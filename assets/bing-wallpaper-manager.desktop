@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Bing Wallpaper
+Name[ja]=Bing 壁紙
+Name[zh_CN]=Bing 壁纸
+Name[zh_TW]=Bing 桌布
+Name[ko]=Bing 배경화면
+Name[de]=Bing-Hintergrund
+Name[fr]=Fond d’écran Bing
+Name[es]=Fondo de Bing
+Name[it]=Sfondo Bing
+Name[pt_BR]=Papel de parede Bing
+Name[ru]=Обои Bing
+Comment=Browse Bing’s daily photos and set them as your wallpaper
+Comment[ja]=Bing の日替わり写真を見比べて壁紙にする
+Exec=bing-wallpaper-manager
+Icon=bing-wallpaper-manager
+Terminal=false
+Categories=Graphics;Viewer;
+Keywords=Bing;wallpaper;background;photo;
+StartupWMClass=bing-wallpaper-manager

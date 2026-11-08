@@ -1,0 +1,27 @@
+#!/bin/sh
+# cargo から呼ばれる rustc（.cargo/config.toml の build.rustc）。
+#
+# gpui-kit（gpui-pre）はディストリビューション同梱の古い rustc ではビルドできないので、
+# rustup の stable ツールチェーンの rustc 本体を探して実行する。
+# rustup のプロキシ（~/.cargo/bin/rustc）は使わない。プロキシは呼ばれた場所の rust-toolchain.toml を読むため、
+# 依存クレートに同梱されたもの（例: 1.83 指定）でクレートごとにコンパイラが切り替わり、ビルドが壊れる。
+#
+# 探す順番:
+#   1. $RUSTUP_HOME（既定 ~/.rustup）の stable ツールチェーン
+#   2. `rustup which --toolchain stable rustc`
+#   3. PATH 上の rustc（rustup を使わず、十分に新しい rustc が入っている環境）
+
+rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+for candidate in "$rustup_home"/toolchains/stable-*/bin/rustc; do
+    if [ -x "$candidate" ]; then
+        exec "$candidate" "$@"
+    fi
+done
+
+for rustup in rustup "${CARGO_HOME:-$HOME/.cargo}/bin/rustup"; do
+    if found=$("$rustup" which --toolchain stable rustc 2>/dev/null) && [ -x "$found" ]; then
+        exec "$found" "$@"
+    fi
+done
+
+exec rustc "$@"

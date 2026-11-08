@@ -1,6 +1,6 @@
-# gpui-kit（gpui-pre）は Ubuntu 標準の rustc 1.93 ではビルドできない（std::hint::cold_path が未対応）。
-# `cargo` が /usr/bin/cargo のままでも rustup の stable を使わせるため、rustc 本体を直接指定する。
-# rustup のプロキシ（~/.cargo/bin/rustc）にすると、依存クレートに同梱された rust-toolchain.toml
-# （例: 1.83 指定）でクレートごとにバージョンが切り替わり、ビルドが壊れるので使わない。
+# gpui-kit（gpui-pre）は Ubuntu 26.04 標準の rustc 1.93 ではビルドできない（std::hint::cold_path が未対応）。
+# PATH の cargo がディストリビューション同梱のものでも、rustup の stable の rustc を使わせる。
+# パスはこのリポジトリからの相対パス（スラッシュを含むので、プロジェクト直下から解決される）。
+# 探し方の詳細は scripts/rustc-stable を参照。
 [build]
-rustc = "/home/tn/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc"
+rustc = "scripts/rustc-stable"
