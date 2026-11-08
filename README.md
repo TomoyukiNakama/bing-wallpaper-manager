@@ -1,0 +1,102 @@
+# Bing Wallpaper Manager
+
+Ubuntu (GNOME) 用の Bing 壁紙アプリです。Rust と [gpui-kit](https://gpui-kit.com) で作っています。
+
+- **ダッシュボード**: 選んだ写真を上部に大きく表示し、その下に「今日の写真」と「過去の写真」（日付ごと）を並べます
+- 「今日の写真」は 6 地域（日本・米国・英国・ドイツ・フランス・中国）の最新を、同じ写真ごとにまとめて配信地域を添えます
+- 写真をクリックすると上部に大きく表示され、「壁紙にする」で GNOME の壁紙（ライト／ダーク両方）に設定します
+- 配色はシステムのライト／ダークに合わせて切り替わります
+- **保存先**はツールバーの「変更…」で選べます（既定は `~/Pictures/BingWallpaper`、日本語環境では `~/ピクチャ/BingWallpaper`）。設定は `~/.config/bing-wallpaper-manager/config.json` に保存されます
+- 取得した画像（全地域の直近 8 日分）は UHD で保存先に保管されます。同じ写真は地域や配信日が違っても 1 枚だけ保存し、保管済みの画像は再ダウンロードしません。日が変わって最新でなくなった画像は「過去の画像」に並びます
+- `--apply` オプションを付けると、GUI を開かずに今日の画像を壁紙に設定します（保存先は GUI と共通）
+
+### 保存先の構成
+
+```text
+<保存先>/
+  20261108_OHR.Foo_UHD.jpg            壁紙用の画像
+  .bing-wallpaper/meta/OHR.Foo.json   タイトル・配信地域などのメタデータ
+  .bing-wallpaper/thumbs/OHR.Foo.jpg  ダッシュボード用サムネイル (640x360)
+```
+
+## ビルド
+
+gpui-kit が依存する gpui は、Ubuntu 26.04 標準の rustc 1.93 ではビルドできません。rustup で新しい stable を入れてください。
+`.cargo/config.toml` で rustc を rustup の stable に固定しているので、`cargo` 自体は Ubuntu 標準のままで構いません。
+
+```sh
+# rustup が無い場合（PATH の変更は不要）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+
+cargo run --release
+```
+
+`.cargo/config.toml` の rustc のパスは `/home/tn/...` 固定です。別のユーザーや別のマシンでビルドするときは書き換えてください。
+
+## コマンドラインで使う
+
+```sh
+bing-wallpaper-manager --apply              # ja-JP の今日の画像を設定
+bing-wallpaper-manager --apply --mkt en-US  # 地域を指定
+```
+
+### 毎日自動で更新する（systemd user timer）
+
+`~/.config/systemd/user/bing-wallpaper.service`:
+
+```ini
+[Unit]
+Description=Set Bing wallpaper
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/bing-wallpaper-manager --apply
+```
+
+`~/.config/systemd/user/bing-wallpaper.timer`:
+
+```ini
+[Unit]
+Description=Daily Bing wallpaper
+
+[Timer]
+OnStartupSec=1min
+OnCalendar=*-*-* 09:05
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+install -Dm755 target/release/bing-wallpaper-manager ~/.local/bin/bing-wallpaper-manager
+systemctl --user daemon-reload
+systemctl --user enable --now bing-wallpaper.timer
+```
+
+## 見た目の確認（スクリーンショット）
+
+仮想の Wayland ディスプレイ（sway の headless モード）でアプリを動かし、PNG を撮ります。
+今のデスクトップ・設定・保存先には触れません（撮影用の設定と画像は `target/screenshot-fixture/` に置かれます）。
+
+```sh
+sudo apt install sway grim          # 初回のみ
+cargo build --release
+scripts/screenshot.sh target/shot.png            # 既定: 15 秒待って 1440x960 で撮影
+BWM_THEME=dark scripts/screenshot.sh target/dark.png 10 1280x1300
+```
+
+`BWM_THEME=light|dark` は通常の起動でも使え、システムの外観に関係なく配色を固定します。
+
+## 構成
+
+| ファイル | 役割 |
+| --- | --- |
+| `src/main.rs` | gpui-kit のダッシュボード UI と CLI |
+| `src/bing.rs` | Bing の HPImageArchive API、画像ダウンロード |
+| `src/library.rs` | 保存先への画像の保管と読み込み |
+| `src/config.rs` | 設定ファイル（保存先） |
+| `src/theme.rs` | 配色（ライト／ダーク）とフォント |
+| `scripts/screenshot.sh` | 仮想ディスプレイでのスクリーンショット撮影 |
+| `src/wallpaper.rs` | `gsettings` による GNOME の壁紙設定 |
