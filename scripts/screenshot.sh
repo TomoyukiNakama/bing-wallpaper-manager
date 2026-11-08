@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # 仮想の Wayland ディスプレイ（sway headless）でアプリを起動し、スクリーンショットを撮る。
-# 今のデスクトップ・設定・保存先には触れない。
+# 今のデスクトップ・設定・保存先・壁紙には触れない（gsettings はメモリ上の仮の保存先を使う）。
 #
 # 使い方: scripts/screenshot.sh [出力PNG] [待機秒数] [幅x高さ]
 #   環境変数 BWM_THEME=light|dark で配色を固定できる
-#   必要なもの: sway, grim
+#   環境変数 ACTIONS に操作を 1 行ずつ書くと、撮影前に順に実行する（座標は論理ピクセル）:
+#     click X Y        X,Y を左クリック
+#     rclick X Y       X,Y を右クリック
+#     scroll down|up N X Y  X,Y の位置で N 段スクロール
+#     key NAME         キーを押す（left / right / up / down / enter / escape / f5）
+#     sleep 秒
+#     shot PATH        途中経過を撮影
+#   必要なもの: sway, grim（ACTIONS では tools/vpointer を自動でビルドして使う）
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -57,6 +64,7 @@ env -u DISPLAY \
     XDG_RUNTIME_DIR="$RUNTIME" \
     WAYLAND_DISPLAY="$SOCK" \
     XDG_CONFIG_HOME="$FIXTURE/config" \
+    GSETTINGS_BACKEND=memory \
     VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
     "$BIN" >"$FIXTURE/app.log" 2>&1 &
 APP_PID=$!
@@ -68,6 +76,46 @@ if ! kill -0 "$APP_PID" 2>/dev/null; then
     exit 1
 fi
 
-mkdir -p "$(dirname "$OUT")"
-XDG_RUNTIME_DIR="$RUNTIME" WAYLAND_DISPLAY="$SOCK" grim "$OUT"
+shot() {
+    mkdir -p "$(dirname "$1")"
+    XDG_RUNTIME_DIR="$RUNTIME" WAYLAND_DISPLAY="$SOCK" grim "$1"
+}
+# headless の sway には入力デバイスが無いので、tools/vpointer の仮想マウス・キーボードで操作する
+# （wlrctl はコマンドごとにマウスを作り直すため、アプリに入力が届かない）
+if [[ -n ${ACTIONS:-} ]]; then
+    VPOINTER=tools/vpointer/target/release/vpointer
+    if [[ ! -x $VPOINTER ]]; then
+        (cd tools/vpointer && cargo build --release -q)
+    fi
+    mkfifo "$RUNTIME/vpointer"
+    XDG_RUNTIME_DIR="$RUNTIME" WAYLAND_DISPLAY="$SOCK" \
+        "$VPOINTER" "${SIZE%x*}" "${SIZE#*x}" <"$RUNTIME/vpointer" >"$RUNTIME/vpointer.log" 2>&1 &
+    exec 3>"$RUNTIME/vpointer"
+    sleep 0.5 # アプリがマウスを認識するのを待つ
+
+    while read -r cmd a b c d; do
+        case $cmd in
+            "" | "#"*) ;;
+            click | rclick)
+                echo "move $a $b" >&3
+                sleep 0.2
+                echo "$cmd" >&3
+                sleep 0.6 ;;
+            scroll)
+                echo "move $c $d" >&3
+                sleep 0.2
+                echo "scroll $([[ $a == up ]] && echo "-$b" || echo "$b")" >&3
+                sleep 0.6 ;;
+            key)
+                echo "key $a" >&3
+                sleep 0.5 ;;
+            sleep) sleep "$a" ;;
+            shot) shot "$a"; echo "保存しました: $a" ;;
+            *) echo "不明な操作: $cmd" >&2; exit 1 ;;
+        esac
+    done <<< "$ACTIONS"
+    exec 3>&-
+fi
+
+shot "$OUT"
 echo "保存しました: $OUT"

@@ -6,7 +6,12 @@ Ubuntu (GNOME) 用の Bing 壁紙アプリです。Rust と [gpui-kit](https://g
 - 「今日の写真」は 6 地域（日本・米国・英国・ドイツ・フランス・中国）の最新を、同じ写真ごとにまとめて配信地域を添えます
 - 写真をクリックすると上部に大きく表示され、「壁紙にする」で GNOME の壁紙（ライト／ダーク両方）に設定します
 - 配色はシステムのライト／ダークに合わせて切り替わります
-- **保存先**はツールバーの「変更…」で選べます（既定は `~/Pictures/BingWallpaper`、日本語環境では `~/ピクチャ/BingWallpaper`）。設定は `~/.config/bing-wallpaper-manager/config.json` に保存されます
+- **壁紙の表示方法**（右上の「設定」）: 写真とモニターの縦横比が違うときの合わせ方を選べます。モニターの比率でのプレビュー付きです
+  - 画面いっぱいに拡大（既定）／写真全体を表示／引き伸ばす／中央に元の大きさで表示／複数のモニターにまたがる
+  - 今の壁紙がこのアプリの写真なら、選んだ時点で反映されます
+- 写真を右クリック、または大きな写真の「…」から「画像を開く」「フォルダで表示」ができます
+- キーボード操作: ←→ で写真を選ぶ、Enter で壁紙にする、F5 / Ctrl+R で更新、Ctrl+, で設定
+- **保存先**は「設定」の「変更…」で選べます（既定は `~/Pictures/BingWallpaper`、日本語環境では `~/ピクチャ/BingWallpaper`）。設定は `~/.config/bing-wallpaper-manager/config.json` に保存されます
 - 取得した画像（全地域の直近 8 日分）は UHD で保存先に保管されます。同じ写真は地域や配信日が違っても 1 枚だけ保存し、保管済みの画像は再ダウンロードしません。日が変わって最新でなくなった画像は「過去の画像」に並びます
 - `--apply` オプションを付けると、GUI を開かずに今日の画像を壁紙に設定します（保存先は GUI と共通）
 
@@ -89,6 +94,13 @@ BWM_THEME=dark scripts/screenshot.sh target/dark.png 10 1280x1300
 
 `BWM_THEME=light|dark` は通常の起動でも使え、システムの外観に関係なく配色を固定します。
 
+`ACTIONS` にクリック・右クリック・スクロール・キー入力を書くと、撮影前に操作できます。仮想マウスと仮想キーボードには `tools/vpointer`（初回に自動でビルド）を使います。撮影中の壁紙設定はメモリ上の仮の保存先に書かれ、実際の壁紙は変わりません。
+
+```sh
+ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' \
+  scripts/screenshot.sh target/step2.png 10 1280x1000
+```
+
 ## 構成
 
 | ファイル | 役割 |
@@ -98,5 +110,7 @@ BWM_THEME=dark scripts/screenshot.sh target/dark.png 10 1280x1300
 | `src/library.rs` | 保存先への画像の保管と読み込み |
 | `src/config.rs` | 設定ファイル（保存先） |
 | `src/theme.rs` | 配色（ライト／ダーク）とフォント |
+| `src/settings.rs` | 設定パネル（表示方法・保存先） |
 | `scripts/screenshot.sh` | 仮想ディスプレイでのスクリーンショット撮影 |
+| `tools/vpointer/` | 撮影時にクリック・スクロールを送る仮想マウス（別プロジェクト） |
 | `src/wallpaper.rs` | `gsettings` による GNOME の壁紙設定 |

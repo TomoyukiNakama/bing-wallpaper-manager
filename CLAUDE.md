@@ -31,6 +31,14 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    BWM_THEME=dark  scripts/screenshot.sh target/shot-dark.png  10 1280x1000
    ```
    sway の headless モードと grim を使い、今のデスクトップ・設定・保存先には触れない。
+   クリックやスクロールが関わる変更は、`ACTIONS` で実際に操作して撮る（静止画だけで済ませない）。
+   ```sh
+   ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' scripts/screenshot.sh target/step2.png 10 1280x1000
+   ```
+   使える操作は `click X Y` / `rclick X Y` / `scroll down|up N X Y` / `key left|right|enter|escape|f5` / `sleep 秒` / `shot PATH`。
+   撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
+   入力は `tools/vpointer`（常駐する仮想マウス・キーボード）で送る。wlrctl はコマンドごとにマウスを作り直すため、
+   アプリに入力が届かないので使わない。座標は先に撮った PNG で確かめてから指定する。
 4. 確認できなかったこと（クリック操作、アニメーションなど）は、そのまま報告に書く。
 
 ## 実行環境の注意
@@ -45,7 +53,11 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   `src/theme.rs` 配色とフォント / `src/wallpaper.rs` gsettings / `src/main.rs` UI と CLI（`--apply`）
 - 保存先には UHD 画像を置き、`.bing-wallpaper/meta`・`.bing-wallpaper/thumbs` にメタデータとサムネイルを置く。
   同じ写真は地域や配信日が違っても `OHR.名前` をキーに 1 枚だけ保存する。
-- デザイン（frontend-design skill で決めたもの）: 写真が主役。上部に選択中の写真を全幅表示し、
+- デザイン（frontend-design skill で決めたもの）: 写真が主役。上部に選択中の写真を全幅表示して固定し（一覧だけスクロール）、
   その下に「今日の写真」（写真ごとに配信地域をまとめる）と「過去の写真」（日付ごとのまとまりを横に流す）。
   配色は `theme.rs` のパレット（霧と湖の色）以外を直書きしない。同じカードの羅列、影、
   中黒（・）区切りのメタ情報、全カードへのホバー演出は使わない。
+- UI の部品選びや操作の作法は gpui-kit の公式 skill（`gpui-kit`、`gpui-kit-design-guides`）のガイドに従う。
+  例: 主要な操作はキーボード（Actions）でも使えるようにする、写真への操作は右クリックメニューと「…」ボタンの両方から出す、
+  設定はフッターではなく設定パネル（Sheet）に置く、押せない「状態」は無効化ボタンではなく表示として出す。
+- Wayland では gpui の `primary_display()` が常に None。モニター情報は `window.display(cx)` から取る。

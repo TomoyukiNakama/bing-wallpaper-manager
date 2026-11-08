@@ -1,0 +1,13 @@
+[package]
+name = "vpointer"
+version = "0.1.0"
+edition = "2024"
+description = "撮影スクリプト用: 仮想マウスを作り、標準入力のコマンドで操作し続ける"
+publish = false
+
+[workspace]
+
+[dependencies]
+wayland-client = "0.31.15"
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

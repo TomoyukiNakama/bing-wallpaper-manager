@@ -1,26 +1,57 @@
 mod bing;
 mod config;
 mod library;
+mod settings;
 mod theme;
 mod wallpaper;
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Disableable as _, IconName, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{
+    Disableable as _, Icon, IconName, Placement, Sizable as _, TitleBar, WindowExt as _, h_flex,
+    v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use bing::{BingImage, MARKETS};
-use config::Config;
+use config::{Config, FitMode};
 use library::{Library, StoredImage};
+use settings::SettingsPanel;
 use theme::Palette;
+
+gpui_kit::actions!(
+    bing_wallpaper,
+    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings]
+);
+
+/// キーボード操作（ダッシュボードにフォーカスがあるとき）。
+fn key_bindings() -> Vec<KeyBinding> {
+    let ctx = Some("Dashboard");
+    vec![
+        KeyBinding::new("left", SelectPrevious, ctx),
+        KeyBinding::new("right", SelectNext, ctx),
+        KeyBinding::new("enter", ApplySelected, ctx),
+        KeyBinding::new("f5", Refresh, ctx),
+        KeyBinding::new("ctrl-r", Refresh, ctx),
+        KeyBinding::new("ctrl-,", OpenSettings, ctx),
+    ]
+}
 
 /// 「過去の写真」を一度に表示する枚数。
 const PAST_PAGE: usize = 48;
+/// タイトルバーとフッターの高さの合計（大きな写真の高さの計算用）。
+const CHROME_HEIGHT: Pixels = px(64.);
+/// 大きな写真を固定しても、一覧に必ず残す高さ。
+const LIST_MIN_HEIGHT: Pixels = px(260.);
 
 enum LatestState {
     Loading,
@@ -71,6 +102,13 @@ struct Dashboard {
     status: SharedString,
     is_error: bool,
     past_limit: usize,
+    focus_handle: FocusHandle,
+    /// 一覧のスクロール位置（キーボードで選んだ写真を見える位置に動かすため自前で持つ）
+    list_scroll: ScrollHandle,
+    /// 前回描画したときの各タイルの位置
+    tile_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+    /// 「写真全体を表示」などで余った部分に GNOME が塗る色（設定画面のプレビュー用）
+    margin_color: Hsla,
     _appearance: Subscription,
 }
 
@@ -99,7 +137,13 @@ impl Dashboard {
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::apply(window, cx);
         });
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
         let mut this = Self {
+            focus_handle,
+            list_scroll: ScrollHandle::new(),
+            tile_bounds: Rc::default(),
+            margin_color: wallpaper::primary_color().map(|c| rgb(c).into()).unwrap_or(black()),
             stored: library.load_all(),
             config,
             library,
@@ -335,13 +379,14 @@ impl Dashboard {
             return;
         };
         self.applying = true;
+        let fit = self.config.fit;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             let target = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { wallpaper::set_wallpaper(&target) })
+                .spawn(async move { wallpaper::set_wallpaper(&target, fit) })
                 .await;
             this.update(cx, |this, cx| {
                 this.applying = false;
@@ -394,6 +439,151 @@ impl Dashboard {
         cx.notify();
     }
 
+    /// 今の壁紙が、このアプリの保存先の写真かどうか。
+    fn wallpaper_is_ours(&self) -> bool {
+        let dir = wallpaper::file_uri(self.library.dir());
+        self.current_uri.as_ref().is_some_and(|uri| uri.starts_with(&dir))
+    }
+
+    /// 表示方法を変える。今の壁紙がこのアプリの写真なら、すぐ反映する。
+    fn set_fit(&mut self, fit: FitMode, cx: &mut Context<Self>) {
+        if self.config.fit == fit {
+            return;
+        }
+        self.config.fit = fit;
+        if let Err(err) = self.config.save() {
+            self.set_status(format!("{err:#}"), true);
+            cx.notify();
+            return;
+        }
+        self.set_status(format!("表示方法を「{}」にしました", fit.label()), false);
+        cx.notify();
+        if self.wallpaper_is_ours() {
+            cx.spawn(async move |this, cx| {
+                let result = cx.background_executor().spawn(async move { wallpaper::set_fit(fit) }).await;
+                if let Err(err) = result {
+                    this.update(cx, |this, cx| {
+                        this.set_status(format!("{err:#}"), true);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// 設定画面のプレビューに使う、表示中の写真とその実際の大きさ。
+    fn preview_photo(&self) -> Option<(PathBuf, Size<f32>)> {
+        let key = self.shown.as_ref()?;
+        let stored = self.find_stored(key);
+        if let Some(path) = stored.and_then(|s| self.library.image_path(s)) {
+            let uhd = path.to_string_lossy().ends_with("_UHD.jpg");
+            let photo = if uhd { size(3840., 2160.) } else { size(1920., 1080.) };
+            return Some((path, photo));
+        }
+        let thumb = self.library.thumb_path(key);
+        thumb.is_file().then(|| (thumb, size(3840., 2160.)))
+    }
+
+    fn open_save_dir(&mut self, cx: &mut Context<Self>) {
+        if let Err(err) = wallpaper::open_folder(self.library.dir()) {
+            self.set_status(format!("{err:#}"), true);
+            cx.notify();
+        }
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dashboard = cx.entity();
+        let panel = cx.new(|cx| SettingsPanel::new(dashboard, cx));
+        window.open_sheet_at(Placement::Right, cx, move |sheet, _, _| {
+            sheet.title("設定").size(px(440.)).child(panel.clone())
+        });
+    }
+
+    /// 写真のファイルに対する操作（画像を開く・フォルダで表示）。
+    fn reveal(&mut self, key: &str, open: bool, cx: &mut Context<Self>) {
+        let Some(path) = self.find_stored(key).and_then(|s| self.library.image_path(s)) else {
+            return;
+        };
+        let result = if open { wallpaper::open_file(&path) } else { wallpaper::show_in_folder(&path) };
+        if let Err(err) = result {
+            self.set_status(format!("{err:#}"), true);
+            cx.notify();
+        }
+    }
+
+    /// 画面に並んでいる順（今日の写真 → 過去の写真）のキー。キーボードでの移動に使う。
+    fn ordered_keys(&self) -> Vec<String> {
+        let today = self.today_photos();
+        let mut keys: Vec<String> = today.iter().map(|t| t.key.clone()).collect();
+        keys.extend(
+            self.stored
+                .iter()
+                .filter(|s| !today.iter().any(|t| t.key == s.key))
+                .take(self.past_limit)
+                .map(|s| s.key.clone()),
+        );
+        keys
+    }
+
+    fn select_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let keys = self.ordered_keys();
+        if keys.is_empty() {
+            return;
+        }
+        let current = self.shown.as_ref().and_then(|k| keys.iter().position(|x| x == k));
+        let next = match current {
+            Some(i) => (i as isize + delta).clamp(0, keys.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let key = keys[next].clone();
+        self.ensure_visible(&key);
+        self.select(key, cx);
+    }
+
+    /// タイルが一覧の表示範囲から外れていれば、見える位置までスクロールする。
+    fn ensure_visible(&self, key: &str) {
+        let Some(tile) = self.tile_bounds.borrow().get(key).copied() else { return };
+        let view = self.list_scroll.bounds();
+        let margin = px(24.);
+        let mut offset = self.list_scroll.offset();
+        if tile.bottom() > view.bottom() {
+            offset.y -= tile.bottom() - view.bottom() + margin;
+        } else if tile.top() < view.top() {
+            offset.y += view.top() - tile.top() + margin;
+        } else {
+            return;
+        }
+        let max = self.list_scroll.max_offset().y;
+        offset.y = offset.y.clamp(-max, px(0.));
+        self.list_scroll.set_offset(offset);
+    }
+
+    /// 写真に対する操作のメニュー（右クリックと、大きな写真の「…」ボタンで共通）。
+    fn photo_menu(
+        entity: WeakEntity<Self>,
+        key: String,
+        can_apply: bool,
+        current: bool,
+        menu: PopupMenu,
+    ) -> PopupMenu {
+        let item = |label: &'static str, f: fn(&mut Self, &str, &mut Context<Self>)| {
+            let entity = entity.clone();
+            let key = key.clone();
+            PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| f(this, &key, cx)).ok();
+            })
+        };
+        menu.item(
+            item("壁紙にする", |this, key, cx| this.apply(key.to_string(), cx))
+                .disabled(!can_apply || current),
+        )
+        .separator()
+        .item(item("画像を開く", |this, key, cx| this.reveal(key, true, cx)).disabled(!can_apply))
+        .item(item("フォルダで表示", |this, key, cx| this.reveal(key, false, cx)).disabled(!can_apply))
+    }
+
     // ---- 描画 ----
 
     fn render_title_bar(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -410,21 +600,38 @@ impl Dashboard {
                         .child("Bing 壁紙"),
                 )
                 .child(
-                    Button::new("refresh")
-                        .small()
-                        .ghost()
-                        .icon(IconName::RefreshCw)
-                        .tooltip("最新の写真を取得")
-                        .loading(self.refreshing)
-                        .disabled(self.refreshing)
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("refresh")
+                                .small()
+                                .ghost()
+                                .icon(IconName::RefreshCw)
+                                .tooltip("最新の写真を取得（F5）")
+                                .loading(self.refreshing)
+                                .disabled(self.refreshing)
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        )
+                        .child(
+                            Button::new("settings")
+                                .small()
+                                .ghost()
+                                .label("設定")
+                                .tooltip("壁紙の表示方法と保存先（Ctrl+,）")
+                                .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+                        ),
                 ),
         )
     }
 
     /// 選んだ写真を全幅で表示する。この画面で唯一の大きな要素。
     fn render_hero(&self, hero: Option<Hero>, p: Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let height = (window.viewport_size().height * 0.52).clamp(px(320.), px(640.));
+        // 上部に固定するので、一覧の領域（LIST_MIN_HEIGHT）を必ず残す高さにする
+        let viewport = window.viewport_size().height;
+        let height = (viewport * 0.5)
+            .min(viewport - CHROME_HEIGHT - LIST_MIN_HEIGHT)
+            .clamp(px(200.), px(600.));
+        let compact = height < px(380.);
         let frame = div().relative().w_full().h(height).flex_none().overflow_hidden().bg(p.surface);
 
         let Some(hero) = hero else {
@@ -463,11 +670,45 @@ impl Dashboard {
         };
 
         let key = hero.key.clone();
+        let menu_button = {
+            let entity = cx.entity().downgrade();
+            let (key, can_apply, current) = (hero.key.clone(), hero.can_apply, hero.current);
+            // 写真の上に置くので、「壁紙に設定中」と同じ暗い下地と白い記号にする
+            // （ButtonCustomVariant は背景を 20% ほどに薄めて使うため、ここでは直接指定する）
+            Button::new("photo-menu")
+                .icon(Icon::new(IconName::Ellipsis).text_color(white()))
+                .tooltip("この写真の操作")
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .color(black())
+                        .foreground(white())
+                        .hover(black().opacity(0.75))
+                        .active(black().opacity(0.85)),
+                )
+                .bg(black().opacity(0.55))
+                .border_1()
+                .border_color(white().opacity(0.28))
+                .dropdown_menu(move |menu, _, _| {
+                    Self::photo_menu(entity.clone(), key.clone(), can_apply, current, menu)
+                })
+        };
         let button = if hero.current {
-            Button::new("apply")
-                .icon(IconName::Check)
-                .label("壁紙に設定中")
-                .disabled(true)
+            // 押せるボタンではなく「状態」なので、無効化したボタン（半透明で読みにくい）にはしない。
+            // 題名と同じ白い文字を、写真の明るさに左右されない暗い下地に載せる。
+            h_flex()
+                .flex_none()
+                .gap_1p5()
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .bg(black().opacity(0.55))
+                .border_1()
+                .border_color(white().opacity(0.28))
+                .text_sm()
+                .text_color(white())
+                .child(Icon::new(IconName::Check).small().text_color(white()))
+                .child("壁紙に設定中")
+                .into_any_element()
         } else {
             Button::new("apply")
                 .primary()
@@ -475,6 +716,7 @@ impl Dashboard {
                 .loading(self.applying)
                 .disabled(!hero.can_apply || self.applying)
                 .on_click(cx.listener(move |this, _, _, cx| this.apply(key.clone(), cx)))
+                .into_any_element()
         };
 
         frame.child(image).child(
@@ -484,8 +726,8 @@ impl Dashboard {
                 .right_0()
                 .bottom_0()
                 .px_8()
-                .pt(px(120.))
-                .pb_7()
+                .pt(px(if compact { 56. } else { 120. }))
+                .pb(px(if compact { 18. } else { 28. }))
                 .gap_6()
                 .items_end()
                 .bg(linear_gradient(
@@ -501,8 +743,8 @@ impl Dashboard {
                         .text_color(white())
                         .child(
                             div()
-                                .text_size(px(34.))
-                                .line_height(px(44.))
+                                .text_size(px(if compact { 26. } else { 34. }))
+                                .line_height(px(if compact { 34. } else { 44. }))
                                 .font_weight(FontWeight::LIGHT)
                                 .child(hero.title),
                         )
@@ -526,7 +768,7 @@ impl Dashboard {
                                 )),
                         ),
                 )
-                .child(button),
+                .child(h_flex().flex_none().gap_2().child(menu_button).child(button)),
         )
     }
 
@@ -546,13 +788,31 @@ impl Dashboard {
         let selected = self.shown.as_deref() == Some(key);
         let thumb = self.library.thumb_path(key);
         let key_owned = key.to_string();
+        let can_apply = self.find_stored(key).is_some_and(|s| self.library.image_path(s).is_some());
+        let entity = cx.entity().downgrade();
+        let menu_key = key.to_string();
+        let (bounds_map, bounds_key) = (self.tile_bounds.clone(), key.to_string());
         v_flex()
             .id(id.into())
+            .relative()
+            // 描画位置を記録しておき、キーボードで選んだときのスクロールに使う
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        bounds_map.borrow_mut().insert(bounds_key, bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .w(px(width))
             .flex_none()
             .gap_1p5()
-            .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| this.select(key_owned.clone(), cx)))
+            .context_menu(move |menu, _, _| {
+                Self::photo_menu(entity.clone(), menu_key.clone(), can_apply, current, menu)
+            })
             .child(
                 div()
                     .w_full()
@@ -737,7 +997,7 @@ impl Dashboard {
             })
     }
 
-    fn render_footer(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_footer(&self, p: Palette) -> impl IntoElement {
         let (text, color) = if self.refreshing {
             (self.progress.clone(), p.slate)
         } else if self.is_error {
@@ -754,37 +1014,14 @@ impl Dashboard {
             .border_t_1()
             .border_color(p.line)
             .text_xs()
-            .child(div().text_color(p.slate).child("保存先"))
+            .when(self.refreshing, |el| el.child(Spinner::new().xsmall().color(p.slate)))
+            .child(div().flex_1().min_w_0().truncate().text_color(color).child(text))
             .child(
                 div()
-                    .max_w(px(420.))
-                    .truncate()
-                    .text_color(p.ink)
-                    .child(self.library.dir().display().to_string()),
+                    .flex_none()
+                    .text_color(p.slate)
+                    .child("← → で写真を選ぶ　Enter で壁紙にする"),
             )
-            .child(
-                Button::new("choose-dir")
-                    .xsmall()
-                    .ghost()
-                    .label("変更")
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_save_dir(cx))),
-            )
-            .child(
-                Button::new("open-folder")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::ExternalLink)
-                    .label("開く")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Err(err) = wallpaper::open_folder(this.library.dir()) {
-                            this.set_status(format!("{err:#}"), true);
-                            cx.notify();
-                        }
-                    })),
-            )
-            .child(div().flex_1())
-            .when(self.refreshing, |el| el.child(Spinner::new().xsmall().color(p.slate)))
-            .child(div().max_w(px(560.)).truncate().text_color(color).child(text))
     }
 }
 
@@ -796,27 +1033,61 @@ impl Render for Dashboard {
         self.shown = hero.as_ref().map(|h| h.key.clone());
         v_flex()
             .size_full()
+            .key_context("Dashboard")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select_step(-1, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_step(1, cx)))
+            .on_action(cx.listener(|this, _: &ApplySelected, _, cx| {
+                if let Some(key) = this.shown.clone() {
+                    this.apply(key, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .font_family(theme::FONT)
             .bg(p.fog)
             .text_color(p.ink)
             .child(self.render_title_bar(p, cx))
+            // 大きな写真は上部に固定し、一覧だけをスクロールさせる。
+            // 下の方の写真を選んでも、選んだ写真が常に見える。
+            .child(self.render_hero(hero, p, window, cx))
             .child(
-                v_flex()
-                    .id("dashboard")
+                div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(self.render_hero(hero, p, window, cx))
                     .child(
-                        v_flex()
-                            .px_8()
-                            .py_7()
-                            .gap_10()
-                            .child(self.render_today(&today, p, cx))
-                            .child(self.render_past(&today, p, cx)),
+                        div()
+                            .id("list")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.list_scroll)
+                            .child(
+                                v_flex()
+                                    .px_8()
+                                    .py_7()
+                                    .gap_10()
+                                    .child(self.render_today(&today, p, cx))
+                                    .child(self.render_past(&today, p, cx)),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.list_scroll)
+                    // スクロールした写真が大きな写真の下端に接して見えないよう、上端を地の色でなじませる
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(20.))
+                            .bg(linear_gradient(
+                                180.,
+                                linear_color_stop(p.fog, 0.),
+                                linear_color_stop(p.fog.opacity(0.), 1.),
+                            )),
                     ),
             )
-            .child(self.render_footer(p, cx))
+            .child(self.render_footer(p))
     }
 }
 
@@ -828,7 +1099,8 @@ fn run_cli(args: &[String]) -> anyhow::Result<()> {
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
         .unwrap_or(MARKETS[0].0);
-    let library = Library::new(Config::load().save_dir());
+    let config = Config::load();
+    let library = Library::new(config.save_dir());
     let image = bing::fetch_archive(mkt, 1)?
         .into_iter()
         .next()
@@ -837,7 +1109,7 @@ fn run_cli(args: &[String]) -> anyhow::Result<()> {
     let path = library
         .image_path(&stored)
         .ok_or_else(|| anyhow::anyhow!("保存した画像が見つかりません"))?;
-    wallpaper::set_wallpaper(&path)?;
+    wallpaper::set_wallpaper(&path, config.fit)?;
     println!("{} {}", bing::date_ja(&image.startdate, true), image.copyright);
     println!("壁紙にしました: {}", path.display());
     Ok(())
@@ -863,6 +1135,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
+            cx.bind_keys(key_bindings());
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(900.)), cx)),
                 window_min_size: Some(size(px(820.), px(560.))),
