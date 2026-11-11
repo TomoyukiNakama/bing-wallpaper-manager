@@ -15,3 +15,9 @@ rust-i18n = "4.2.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 ureq = { version = "3.5.1", features = ["json"] }
+
+# `cargo run`（debug ビルド）でも依存ライブラリは最適化する。
+# 最適化しないと UHD 画像のデコードに 1 枚 2 秒ほどかかり、写真の切り替えが遅れる（最適化すると 0.04 秒ほど）。
+# このアプリ自身のコードは最適化しないので、変更後の再ビルドの速さとデバッグのしやすさは変わらない。
+[profile.dev.package."*"]
+opt-level = 3

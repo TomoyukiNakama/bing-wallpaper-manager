@@ -28,6 +28,8 @@ pub struct Palette {
     pub lake_hover: Hsla,
     pub on_lake: Hsla,
     pub danger: Hsla,
+    /// ダイアログを開いている間、後ろの画面にかける暗幕
+    pub scrim: Hsla,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -46,6 +48,7 @@ impl Palette {
             lake_hover: c(0x255A79),
             on_lake: c(0xFFFFFF),
             danger: c(0xA8402F),
+            scrim: c(0x1C2A33).opacity(0.22),
         }
     }
 
@@ -60,6 +63,7 @@ impl Palette {
             lake_hover: c(0x86B8D4),
             on_lake: c(0x10202A),
             danger: c(0xE88C7A),
+            scrim: c(0x000000).opacity(0.4),
         }
     }
 
@@ -144,5 +148,8 @@ pub fn apply(window: &Window, cx: &mut App) {
         colors.title_bar = p.surface;
         colors.title_bar_border = p.line;
         colors.danger = p.danger;
+        // gpui-kit のダイアログの暗幕は、角の丸い窓の外（影の部分）まで四角く覆うので透明にし、
+        // 代わりに窓の形に合わせた暗幕を Dashboard が描く（Palette::scrim）
+        colors.overlay = c(0x000000).opacity(0.);
     });
 }

@@ -6,6 +6,7 @@
 #   環境変数 BWM_THEME=light|dark で配色を固定できる
 #   環境変数 STORE で保存先を差し替えられる（既定は target/screenshot-fixture/store）
 #   環境変数 FLOAT=幅x高さ で、ウィンドウを画面全体に広げず浮かせて撮る（角の丸み・影・窓のボタンの確認用）
+#   環境変数 BG=画像 で、デスクトップの背景にその画像を敷く（FLOAT と組み合わせて README 用の画像を撮る）
 #   環境変数 ACTIONS に操作を 1 行ずつ書くと、撮影前に順に実行する（座標は論理ピクセル）:
 #     click X Y        X,Y を左クリック
 #     rclick X Y       X,Y を右クリック
@@ -49,8 +50,9 @@ default_border none
 default_floating_border none
 EOF
 if [[ -n ${FLOAT:-} ]]; then
+    if [[ -n ${BG:-} ]]; then BACKGROUND="$(realpath "$BG") fill"; else BACKGROUND="#6a7f8c solid_color"; fi
     cat >> "$RUNTIME/sway.conf" <<EOF
-output HEADLESS-1 bg #6a7f8c solid_color
+output HEADLESS-1 bg $BACKGROUND
 for_window [app_id="bing-wallpaper-manager"] floating enable, resize set ${FLOAT%x*} ${FLOAT#*x}, move position center
 EOF
 fi

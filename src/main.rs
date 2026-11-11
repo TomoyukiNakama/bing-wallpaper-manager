@@ -206,6 +206,9 @@ struct Dashboard {
     window_bar: (bool, usize),
     /// 大きな写真を押したまま動かしたら、ウィンドウの移動を始める
     window_bar_pressed: bool,
+    /// 先に読み込んでおく前後の写真の画像（どの写真・どの並びのときに求めたか, 画像）。
+    /// ←→ で隣に移ったとき、画像のデコードを待たずに切り替えられる
+    preload: (Option<String>, u64, Vec<PathBuf>),
     _appearance: Subscription,
     _search_events: Subscription,
 }
@@ -303,6 +306,7 @@ impl Dashboard {
             hero_hovered: false,
             window_bar: (false, 0),
             window_bar_pressed: false,
+            preload: (None, 0, Vec::new()),
             _appearance: appearance,
             _search_events: search_events,
         };
@@ -610,7 +614,12 @@ impl Dashboard {
             if let Err(err) = result {
                 eprintln!("preview download failed: {err:#}");
             }
-            this.update(cx, |_, cx| cx.notify()).ok();
+            this.update(cx, |this, cx| {
+                // 先読みする画像を、取得した中サイズの画像に差し替える
+                this.preload.0 = None;
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -943,9 +952,19 @@ impl Dashboard {
         let dashboard = cx.entity();
         let language = self.config.language;
         let view = cx.new(|cx| SettingsView::new(dashboard, language, window, cx));
+        let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
-            dialog.title(tr!("settings.title")).w(px(880.)).child(view.clone())
+            let weak = weak.clone();
+            dialog
+                .title(tr!("settings.title"))
+                .w(px(880.))
+                .child(view.clone())
+                // 閉じたら、窓の形の暗幕を外すために描き直す
+                .on_close(move |_, _, cx| {
+                    weak.update(cx, |_, cx| cx.notify()).ok();
+                })
         });
+        cx.notify();
     }
 
     /// 表示言語を変える（すぐに画面全体へ反映する）。
@@ -1198,6 +1217,30 @@ impl Dashboard {
         keys
     }
 
+    /// 選んでいる写真の前後の写真の画像を、裏で読み込んでおく。
+    /// 前後を求め直すのは選択か並びが変わったときだけ（写真が数百枚あるので毎フレームは探さない）。
+    fn preload_neighbors(&mut self, today: &[TodayPhoto], window: &mut Window, cx: &mut Context<Self>) {
+        if self.preload.0 != self.shown || self.preload.1 != self.list_signature {
+            let mut paths = Vec::new();
+            if let Some(shown) = self.shown.clone() {
+                let keys = self.ordered_keys();
+                if let Some(i) = keys.iter().position(|k| *k == shown) {
+                    let neighbors = [i.checked_sub(1), Some(i + 1)];
+                    for key in neighbors.into_iter().flatten().filter_map(|j| keys.get(j)) {
+                        // サムネイルしか無い写真は、中サイズの画像も先に取得しておく
+                        self.request_preview(key, cx);
+                        paths.extend(self.hero_for(key.clone(), today).and_then(|h| h.image));
+                    }
+                }
+            }
+            self.preload = (self.shown.clone(), self.list_signature, paths);
+        }
+        // 毎フレーム使っていることにして、デコード済みの画像をキャッシュに残す
+        for path in &self.preload.2 {
+            window.use_asset::<ImgResourceLoader>(&Resource::Path(Arc::from(path.as_path())), cx);
+        }
+    }
+
     fn select_step(&mut self, delta: isize, cx: &mut Context<Self>) {
         let keys = self.ordered_keys();
         if keys.is_empty() {
@@ -1264,7 +1307,7 @@ impl Dashboard {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // 写真の上に置くので、白い記号を暗い下地なしで出し、触れたときだけ薄い白で示す
+        // 写真の上に置くので、白い記号だけを出し、触れたときだけ薄い白で示す
         let on_photo = |cx: &mut Context<Self>| {
             ButtonCustomVariant::new(cx)
                 .color(transparent_black())
@@ -1272,8 +1315,16 @@ impl Dashboard {
                 .hover(white().opacity(0.18))
                 .active(white().opacity(0.28))
         };
-        // ボタンを押したときに、ウィンドウの移動が始まらないようにする
-        let keep = |el: Div| el.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        // ボタンは暗い半透明の帯にまとめ、明るい写真（空など）の上でも白い記号が読めるようにする。
+        // ボタンを押したときに、ウィンドウの移動が始まらないようにもする
+        let pill = |el: Div| {
+            el.p_0p5()
+                .rounded_full()
+                .bg(black().opacity(0.5))
+                .border_1()
+                .border_color(white().opacity(0.12))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
         let fullscreen = window.is_fullscreen();
         let app_buttons = h_flex()
             .gap_1()
@@ -1328,14 +1379,13 @@ impl Dashboard {
                     .rounded_full()
                     .items_center()
                     .justify_center()
-                    .bg(black().opacity(0.28))
                     .text_color(white())
                     .hover(move |s| if close { s.bg(p.danger) } else { s.bg(white().opacity(0.24)) })
                     .active(move |s| if close { s.bg(p.danger.opacity(0.85)) } else { s.bg(white().opacity(0.34)) })
                     .child(Icon::new(icon).xsmall().text_color(white()))
             };
             h_flex()
-                .gap_2()
+                .gap_1()
                 .when(supported.minimize, |el| {
                     el.child(
                         control("minimize", IconName::WindowMinimize, false)
@@ -1376,14 +1426,25 @@ impl Dashboard {
             // ダブルクリックで最大化、右クリックでウィンドウのメニュー（移動は大きな写真全体で受け付ける）
             .on_double_click(|_, window, _| window.zoom_window())
             .on_mouse_down(MouseButton::Right, |ev, window, _| window.show_window_menu(ev.position))
-            // 明るい写真の上でも白い記号が読めるよう、上端だけ少し暗くする
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(black().opacity(0.42), 0.),
-                linear_color_stop(black().opacity(0.), 1.),
-            ))
+            // 明るい写真（空など）の上でも白い記号が読めるよう、上端を暗くする。
+            // バーより少し長く伸ばして、暗さの境目を目立たせない
             .child(
-                keep(div()).child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(WINDOW_BAR_HEIGHT * 1.75)
+                    .rounded_tl(radii.top_left)
+                    .rounded_tr(radii.top_right)
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(black().opacity(0.4), 0.),
+                        linear_color_stop(black().opacity(0.), 1.),
+                    )),
+            )
+            .child(
+                pill(div()).child(
                     Button::new("fullscreen")
                         .small()
                         .icon(
@@ -1400,10 +1461,10 @@ impl Dashboard {
                 ),
             )
             .child(
-                keep(h_flex().gap_3()).child(app_buttons).children(controls.map(|c| {
+                pill(h_flex().gap_1()).child(app_buttons).children(controls.map(|c| {
                     h_flex()
-                        .gap_3()
-                        .child(div().w(px(1.)).h(px(18.)).bg(white().opacity(0.35)))
+                        .gap_1()
+                        .child(div().mx_1().w(px(1.)).h(px(16.)).bg(white().opacity(0.3)))
                         .child(c)
                 })),
             )
@@ -2090,13 +2151,26 @@ impl Render for Dashboard {
         if let Some(key) = self.shown.clone() {
             self.request_preview(&key, cx);
         }
+        self.preload_neighbors(&today, window, cx);
         // タイトルバーは、写真にマウスが乗っているとき（写真がまだ無いときは常に）だけ出す
         let bar_visible = self.hero_hovered || hero.as_ref().is_none_or(|h| h.image.is_none());
         if self.window_bar.0 != bar_visible {
             self.window_bar = (bar_visible, self.window_bar.1 + 1);
         }
         let radii = window_corner_radii(window, cx);
+        // ダイアログを開いている間は、窓の形（角の丸み）に合わせて後ろを暗くする
+        let scrim = window.has_active_dialog(cx).then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_tl(radii.top_left)
+                .rounded_tr(radii.top_right)
+                .rounded_bl(radii.bottom_left)
+                .rounded_br(radii.bottom_right)
+                .bg(p.scrim)
+        });
         v_flex()
+            .relative()
             .size_full()
             .key_context("Dashboard")
             .track_focus(&self.focus_handle)
@@ -2142,7 +2216,17 @@ impl Render for Dashboard {
                         MouseButton::Left,
                         cx.listener(|this, _, _, _| this.window_bar_pressed = true),
                     )
-                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.window_bar_pressed = false))
+                    // 動かさずに離したら（＝クリック）、細い帯になっている大きな写真を元の高さに戻す
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if std::mem::take(&mut this.window_bar_pressed) && this.hero_collapsed {
+                                this.hero_collapsed = false;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .when(self.hero_collapsed, |el| el.cursor_pointer())
                     .on_mouse_down_out(cx.listener(|this, _, _, _| this.window_bar_pressed = false))
                     .on_mouse_move(cx.listener(|this, _, window, _| {
                         if this.window_bar_pressed {
@@ -2184,6 +2268,7 @@ impl Render for Dashboard {
                     ),
             )
             .child(self.render_footer(p, radii))
+            .children(scrim)
     }
 }
 

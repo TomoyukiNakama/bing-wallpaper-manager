@@ -6,11 +6,13 @@
 
 A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them as your GNOME wallpaper. Built with Rust, [GPUI](https://gpui.rs) and [gpui-kit](https://gpui-kit.com).
 
-![Bing Wallpaper Manager dashboard (English, dark theme)](docs/screenshot.jpg)
+![The selected photo fills the top of the rounded window; the title bar appears over it while the mouse is on the photo (English, dark theme)](docs/screenshot.jpg)
+
+The photo you pick fills the top of a rounded, frameless window. Hover over it to bring up the title bar; set it as the wallpaper and it is marked *Current wallpaper*.
 
 ## Features
 
-- **Dashboard**: the selected photo is shown large at the top, with *Today’s photos* and *Earlier photos* (grouped by date) below. The large photo stays pinned above the list, shrinks to a slim bar while you scroll, and expands again when you pick a photo. Switching photos crossfades smoothly once the new image has loaded
+- **Dashboard**: the selected photo is shown large at the top, with *Today’s photos* and *Earlier photos* (grouped by date) below. The large photo stays pinned above the list, shrinks to a slim bar while you scroll, and expands again when you pick a photo or click the slim bar. Switching photos crossfades smoothly once the new image has loaded
 - **Frameless window**: rounded corners, with the large photo reaching the top edge. The title bar (search, favorites, refresh, settings, full screen and the window buttons) appears over the photo only while the mouse is on it; drag the photo to move the window, double-click the top edge to maximize
 - **Today’s photos**: the latest photo from six regions (Japan, United States, United Kingdom, Germany, France, China), grouped by photo with the regions that show it
 - **Set as wallpaper**: sets the GNOME wallpaper for both light and dark styles. The current wallpaper is marked *Current wallpaper*
@@ -28,6 +30,12 @@ A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them
 - **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, Ctrl+D to add or remove a favorite, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings, F11 for full screen
 - **Command line**: `--apply` sets today’s photo as the wallpaper without opening the window
 
+## Browsing
+
+Scroll the list and the large photo shrinks to a slim bar, leaving more room for photos; pick a photo or click the bar to expand it again. Earlier photos are grouped by date, and favorites carry a ★ badge. Right-click any photo (or use *…* on the large photo) to set it as the wallpaper, add it to your favorites, open the image or show it in its folder.
+
+![Scrolled list with the slim bar at the top and a photo’s right-click menu](docs/browse.jpg)
+
 ## Search
 
 Press **Ctrl+F** (or click the 🔍 button in the title bar) to search the photos you have saved. While searching, the list shows only the matching photos; click one to see it large at the top, or press Escape to go back.
@@ -43,6 +51,12 @@ Type any word from a photo’s title, place, description, region or date (such a
 Pick one of ten colors (red, orange, yellow, green, cyan, blue, purple, pink, white, black) to list the photos that contain the most of that color first. The color shares are computed from each photo’s thumbnail in the background. Words and a color can be combined, for example “mountain” + blue.
 
 ![Photos with a lot of blue](docs/search-color.jpg)
+
+## Wallpaper fit
+
+When the photo’s shape differs from your monitor, choose how it fits in **Settings** (☰ at the top right, or Ctrl+,) → **Wallpaper**. The preview uses your monitor’s proportions and the photo shown at the top; with *Show the whole photo*, the leftover space is filled with the background color GNOME uses. The current wallpaper updates right away.
+
+![Wallpaper settings previewing “Show the whole photo”](docs/settings-fit.jpg)
 
 ## Built with
 
@@ -200,12 +214,21 @@ BWM_THEME=dark BWM_LANG=de scripts/screenshot.sh target/dark.png 10 1280x1300
 ```
 
 `BWM_THEME=light|dark` fixes the theme and `BWM_LANG=de` (etc.) fixes the language; both also work in a normal launch.
+`FLOAT=1280x840` shows the window floating instead of filling the screen (to check the rounded corners and window buttons), and `BG=<image>` puts an image behind it as the desktop background.
 
-Put clicks, right-clicks, scrolling, keys and typing in `ACTIONS` to interact before the screenshot. Input is sent through a virtual mouse and keyboard in `tools/vpointer` (built automatically on first use).
+Put clicks, right-clicks, drags, scrolling, keys and typing in `ACTIONS` to interact before the screenshot. Input is sent through a virtual mouse and keyboard in `tools/vpointer` (built automatically on first use).
 
 ```sh
 ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
   scripts/screenshot.sh target/step2.png 10 1280x1000
+```
+
+The images in `docs/` are taken this way with the dark theme (English for `README.md`, Japanese `*.ja.jpg` for `README.ja.md`) and saved as JPEG at quality 85, for example:
+
+```sh
+BG=target/screenshot-fixture/store/20261111_OHR.SunsetFlags_UHD.jpg FLOAT=1280x840 BWM_LANG=en BWM_THEME=dark \
+  ACTIONS=$'click 583 660\nsleep 1.5\nkey enter\nsleep 2\nclick 720 250\nsleep 1.5' \
+  scripts/screenshot.sh target/main.png 12 1440x980
 ```
 
 ### Release packages
