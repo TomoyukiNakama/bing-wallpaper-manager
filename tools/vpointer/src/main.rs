@@ -8,6 +8,7 @@
 //!   move X Y      絶対座標へ移動
 //!   click         左クリック
 //!   rclick        右クリック
+//!   press / release  左ボタンを押す／離す（ドラッグ用）
 //!   scroll N      N 段スクロール（正で下、負で上）
 //!   key NAME      キーを押して離す（left / right / up / down / enter / escape / f5 / ctrl-英字）
 //!   type TEXT     英小文字・数字・空白・ハイフンを入力する
@@ -138,6 +139,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 conn.flush()?;
                 sleep(Duration::from_millis(60));
                 pointer.button(time(), button, wl_pointer::ButtonState::Released);
+                pointer.frame();
+            }
+            [cmd @ ("press" | "release")] => {
+                let state = if cmd == "press" {
+                    wl_pointer::ButtonState::Pressed
+                } else {
+                    wl_pointer::ButtonState::Released
+                };
+                pointer.button(time(), BTN_LEFT, state);
                 pointer.frame();
             }
             ["scroll", n] => {

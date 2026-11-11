@@ -9,7 +9,7 @@ authors = ["Tomoyuki Nakama"]
 [dependencies]
 anyhow = "1.0.104"
 dirs = "7.0.0"
-gpui-kit = "0.9.0"
+gpui-kit = "0.9.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 rust-i18n = "4.2.4"
 serde = { version = "1.0.229", features = ["derive"] }

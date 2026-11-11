@@ -5,9 +5,11 @@
 # 使い方: scripts/screenshot.sh [出力PNG] [待機秒数] [幅x高さ]
 #   環境変数 BWM_THEME=light|dark で配色を固定できる
 #   環境変数 STORE で保存先を差し替えられる（既定は target/screenshot-fixture/store）
+#   環境変数 FLOAT=幅x高さ で、ウィンドウを画面全体に広げず浮かせて撮る（角の丸み・影・窓のボタンの確認用）
 #   環境変数 ACTIONS に操作を 1 行ずつ書くと、撮影前に順に実行する（座標は論理ピクセル）:
 #     click X Y        X,Y を左クリック
 #     rclick X Y       X,Y を右クリック
+#     drag X1 Y1 X2 Y2 X1,Y1 で左ボタンを押し、X2,Y2 まで動かして離す
 #     scroll down|up N X Y  X,Y の位置で N 段スクロール
 #     key NAME         キーを押す（left / right / up / down / enter / escape / f5 / ctrl-英字）
 #     type TEXT        英小文字・数字・空白・ハイフンを入力する
@@ -46,6 +48,12 @@ output HEADLESS-1 resolution $SIZE position 0 0
 default_border none
 default_floating_border none
 EOF
+if [[ -n ${FLOAT:-} ]]; then
+    cat >> "$RUNTIME/sway.conf" <<EOF
+output HEADLESS-1 bg #6a7f8c solid_color
+for_window [app_id="bing-wallpaper-manager"] floating enable, resize set ${FLOAT%x*} ${FLOAT#*x}, move position center
+EOF
+fi
 
 env -u DISPLAY -u WAYLAND_DISPLAY \
     XDG_RUNTIME_DIR="$RUNTIME" \
@@ -104,6 +112,18 @@ if [[ -n ${ACTIONS:-} ]]; then
                 echo "move $a $b" >&3
                 sleep 0.2
                 echo "$cmd" >&3
+                sleep 0.6 ;;
+            drag)
+                echo "move $a $b" >&3
+                sleep 0.2
+                echo "press" >&3
+                sleep 0.2
+                for i in 1 2 3 4 5 6 7 8 9 10; do
+                    echo "move $((a + (c - a) * i / 10)) $((b + (d - b) * i / 10))" >&3
+                    sleep 0.05
+                done
+                sleep 0.2
+                echo "release" >&3
                 sleep 0.6 ;;
             scroll)
                 echo "move $c $d" >&3

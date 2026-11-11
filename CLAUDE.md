@@ -4,20 +4,25 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 
 ## ビルド環境（必ず守る）
 
-- ユーザーは **素の `cargo`（`/usr/bin/cargo`、Ubuntu 標準 1.93）** で `cargo run` する。PATH に `~/.cargo/bin` は入っていない。
-- gpui-kit が依存する gpui-pre は rustc 1.93 ではビルドできない（`std::hint::cold_path`）。そのため
-  `.cargo/config.toml` で rustc を `scripts/rustc-stable` にしている。このスクリプトが rustup の stable の rustc 本体
-  （`$RUSTUP_HOME/toolchains/stable-*/bin/rustc`）を探して実行する（無ければ `rustup which`、PATH の rustc の順）。
+- ユーザーは **rustup の `cargo`（`~/.cargo/bin/cargo`、stable）** で `cargo run` する。
+  `~/.profile` と `~/.bashrc` で `~/.cargo/env` を読み込み、PATH に `~/.cargo/bin` が入っている。
+  Ubuntu 標準の cargo は `/usr/bin/cargo-1.93` だけで、`/usr/bin/cargo` は無い。
+- gpui-kit が依存する gpui-pre は rustc 1.93 ではビルドできない（`std::hint::cold_path`）。
+  ディストリビューションの cargo でもビルドできるよう、`.cargo/config.toml` で rustc を `scripts/rustc-stable` にしている。
+  このスクリプトが rustup の stable の rustc 本体（`$RUSTUP_HOME/toolchains/stable-*/bin/rustc`）を探して実行する
+  （無ければ `rustup which`、PATH の rustc の順）。rustup の cargo でも、この設定を通して同じ rustc が使われる。
   - **rustup のプロキシ（`~/.cargo/bin/rustc`）を直接使うように変えない。**
     プロキシは依存クレートに同梱された `rust-toolchain.toml`（1.83 指定など）でクレートごとにコンパイラを切り替え、
     `E0514 compiled by an incompatible version of rustc` で壊れる。
   - 個人のパス（`/home/...`）を設定ファイルに書かない（リポジトリは public）。
-  - `rust-toolchain.toml`（stable）は rustup 版 cargo を使う場合のためのもの。
-- 確認には **ユーザーと同じ cargo を使う**。PATH に `~/.cargo/bin` を足した状態で確認して「動く」と報告しない。
+  - `rust-toolchain.toml`（stable）は rustup 版 cargo のためのもの。
+  - `cargo-1.93` は `RUSTC` 環境変数で rustc 1.93 を指定するため `.cargo/config.toml` の設定より優先され、ビルドできない。使わない。
+- 確認には **ユーザーと同じ cargo（rustup の cargo）を使う**。シェル設定に左右されないよう、PATH を明示して実行する。
   ```sh
-  env -i HOME=$HOME PATH=/usr/local/bin:/usr/bin:/bin bash -c 'cd /mnt/ssd2/git/bing-wallpaper-manager && cargo build && cargo test'
+  env -i HOME=$HOME PATH=$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin bash -c 'cd /mnt/ssd2/git/bing-wallpaper-manager && cargo build && cargo test'
   ```
   （cargo の種類が変わるとキャッシュが合わず全体を再ビルドするので、普段からこの cargo に揃える）
+  以下の `cargo build --release` や `timeout 12 cargo run` も同じ PATH で実行する。
 - 依存の追加・更新をしたら、上のコマンドでビルドが通ることを必ず確認する。
 - `E0514` や `cold_path` のエラーが出たら、古い成果物が原因のことがある。`rm -rf target/debug`（または `target/release`）してから再ビルドする。
 
@@ -36,7 +41,7 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    ```sh
    ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' scripts/screenshot.sh target/step2.png 10 1280x1000
    ```
-   使える操作は `click X Y` / `rclick X Y` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
+   使える操作は `click X Y` / `rclick X Y` / `drag X1 Y1 X2 Y2` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
    `type 英小文字・数字・空白` / `sleep 秒` / `shot PATH`。
    撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
    写真が多いときの動作（スクロールの重さなど）は、`STORE=<写真が数百枚ある保存先のコピー>` で保存先を差し替えて確かめる
@@ -57,6 +62,11 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   `src/theme.rs` 配色とフォント / `src/wallpaper.rs` gsettings / `src/main.rs` UI と CLI（`--apply`）
 - 保存先には UHD 画像を置き、`.bing-wallpaper/meta`・`.bing-wallpaper/thumbs` にメタデータとサムネイルを置く。
   同じ写真は地域や配信日が違っても `OHR.名前` をキーに 1 枚だけ保存する。
+- ウィンドウは枠をアプリが描き（`WindowDecorations::Client`）、角を丸くする（`theme::WINDOW_RADIUS`）。gpui の切り抜きは四角いので、
+  窓の角に接する要素（大きな写真の画像・下地、タイトルバー、フッター）はそれぞれ `window_corner_radii` で角を丸める。
+  タイトルバーは gpui-kit の `TitleBar` を使わず、大きな写真に重ねて、マウスが写真に乗っている間だけ出す（`render_window_bar`）。
+  ウィンドウの移動は大きな写真全体で受け付けるので、写真の上に置くボタンは `on_mouse_down` で伝播を止める。
+  角・影・窓のボタンは `FLOAT=1100x820 scripts/screenshot.sh ...` でウィンドウを浮かせて撮って確かめる。
 - デザイン（frontend-design skill で決めたもの）: 写真が主役。上部に選択中の写真を全幅表示して固定し（一覧だけスクロール）、
   その下に「今日の写真」（写真ごとに配信地域をまとめる）と「過去の写真」（日付ごとのまとまりを横に流す）。
   配色は `theme.rs` のパレット（霧と湖の色）以外を直書きしない。同じカードの羅列、影、

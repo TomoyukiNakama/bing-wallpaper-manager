@@ -25,8 +25,8 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    Disableable as _, Selectable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _, h_flex,
-    v_flex,
+    Disableable as _, Icon, IconName, InteractiveElementExt as _, Sizable as _,
+    WindowExt as _, h_flex, v_flex, window_corner_radii,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -42,7 +42,17 @@ use theme::Palette;
 
 gpui_kit::actions!(
     bing_wallpaper,
-    [SelectPrevious, SelectNext, ApplySelected, Refresh, OpenSettings, FocusSearch, CloseSearch, ToggleFavorite]
+    [
+        SelectPrevious,
+        SelectNext,
+        ApplySelected,
+        Refresh,
+        OpenSettings,
+        FocusSearch,
+        CloseSearch,
+        ToggleFavorite,
+        ToggleFullscreen
+    ]
 );
 
 /// キーボード操作（ダッシュボードにフォーカスがあるとき）。
@@ -58,6 +68,7 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-f", FocusSearch, ctx),
         KeyBinding::new("ctrl-d", ToggleFavorite, ctx),
         KeyBinding::new("escape", CloseSearch, ctx),
+        KeyBinding::new("f11", ToggleFullscreen, ctx),
     ]
 }
 
@@ -87,8 +98,11 @@ enum ListItem {
 }
 /// 「さらに古い写真を読み込む」で一度に読み込む日数。
 const OLDER_DAYS: usize = 30;
-/// タイトルバーとフッターの高さの合計（大きな写真の高さの計算用）。
-const CHROME_HEIGHT: Pixels = px(64.);
+/// フッターの高さ（大きな写真の高さの計算用）。タイトルバーは大きな写真に重ねるので含めない。
+const CHROME_HEIGHT: Pixels = px(30.);
+/// 大きな写真に重ねるタイトルバーの高さと、表示・非表示を切り替える時間。
+const WINDOW_BAR_HEIGHT: Pixels = px(48.);
+const WINDOW_BAR_FADE: Duration = Duration::from_millis(180);
 /// 大きな写真を固定しても、一覧に必ず残す高さ。
 const LIST_MIN_HEIGHT: Pixels = px(260.);
 /// 一覧をスクロールしたときの、大きな写真の細い帯の高さ。
@@ -186,6 +200,12 @@ struct Dashboard {
     hero_height: (f32, f32, usize),
     /// 高さのアニメーションを始めた時刻（アニメーション中は細い帯の切り替えをしない）
     hero_height_changed: Option<std::time::Instant>,
+    /// 大きな写真にマウスが乗っているか（乗っている間だけタイトルバーを出す）
+    hero_hovered: bool,
+    /// タイトルバーのフェードのアニメーション（表示するか, 識別番号）
+    window_bar: (bool, usize),
+    /// 大きな写真を押したまま動かしたら、ウィンドウの移動を始める
+    window_bar_pressed: bool,
     _appearance: Subscription,
     _search_events: Subscription,
 }
@@ -280,6 +300,9 @@ impl Dashboard {
             hero_collapsed: false,
             hero_height: (0., 0., 0),
             hero_height_changed: None,
+            hero_hovered: false,
+            window_bar: (false, 0),
+            window_bar_pressed: false,
             _appearance: appearance,
             _search_events: search_events,
         };
@@ -1231,68 +1254,190 @@ impl Dashboard {
 
     // ---- 描画 ----
 
-    fn render_title_bar(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new().child(
+    /// 大きな写真に重ねるタイトルバー。写真にマウスが乗っている間だけ出し、写真を隠さない。
+    /// 左に全画面表示、右にアプリの操作とウィンドウの操作（最小化・最大化・閉じる）を置く。
+    /// 見えていないときも、上端をつかんでウィンドウを動かせる。
+    fn render_window_bar(
+        &self,
+        p: Palette,
+        radii: Corners<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // 写真の上に置くので、白い記号を暗い下地なしで出し、触れたときだけ薄い白で示す
+        let on_photo = |cx: &mut Context<Self>| {
+            ButtonCustomVariant::new(cx)
+                .color(transparent_black())
+                .foreground(white())
+                .hover(white().opacity(0.18))
+                .active(white().opacity(0.28))
+        };
+        // ボタンを押したときに、ウィンドウの移動が始まらないようにする
+        let keep = |el: Div| el.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        let fullscreen = window.is_fullscreen();
+        let app_buttons = h_flex()
+            .gap_1()
+            .child(
+                Button::new("search")
+                    .small()
+                    .icon(Icon::new(IconName::Search).text_color(white()))
+                    .tooltip(tr!("action.search_tooltip"))
+                    .custom(on_photo(cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
+            )
+            .child(
+                Button::new("show-favorites")
+                    .small()
+                    .icon(
+                        Icon::new(if self.query.favorites { IconName::StarFill } else { IconName::Star })
+                            .text_color(white()),
+                    )
+                    .tooltip(tr!("favorite.show"))
+                    .custom(on_photo(cx))
+                    .when(self.query.favorites, |b| b.bg(white().opacity(0.22)))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_favorites_filter(cx))),
+            )
+            .child(
+                Button::new("refresh")
+                    .small()
+                    .icon(Icon::new(IconName::RefreshCw).text_color(white()))
+                    .tooltip(tr!("action.refresh_tooltip"))
+                    .custom(on_photo(cx))
+                    .loading(self.refreshing)
+                    .disabled(self.refreshing)
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+            )
+            .child(
+                Button::new("settings")
+                    .small()
+                    .icon(Icon::new(IconName::Menu).text_color(white()))
+                    .tooltip(tr!("action.settings_tooltip"))
+                    .custom(on_photo(cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+            );
+        // ウィンドウの操作は、このアプリが枠を描いているとき（GNOME の Wayland など）だけ出す
+        let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
+        let controls = client_decorated.then(|| {
+            let supported = window.window_controls();
+            let control = |id: &'static str, icon: IconName, close: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .flex_none()
+                    .size(px(28.))
+                    .rounded_full()
+                    .items_center()
+                    .justify_center()
+                    .bg(black().opacity(0.28))
+                    .text_color(white())
+                    .hover(move |s| if close { s.bg(p.danger) } else { s.bg(white().opacity(0.24)) })
+                    .active(move |s| if close { s.bg(p.danger.opacity(0.85)) } else { s.bg(white().opacity(0.34)) })
+                    .child(Icon::new(icon).xsmall().text_color(white()))
+            };
             h_flex()
-                .flex_1()
-                .pr_2()
-                .justify_between()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(p.ink)
-                        .child(tr!("app.name")),
-                )
-                .child(
-                    div().w(px(360.)).child(
-                        Input::new(&self.search_input)
-                            .small()
-                            .prefix(Icon::new(IconName::Search).small().text_color(p.slate))
-                            .cleanable(true),
-                    ),
-                )
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("refresh")
-                                .small()
-                                .ghost()
-                                .icon(IconName::RefreshCw)
-                                .tooltip(tr!("action.refresh_tooltip"))
-                                .loading(self.refreshing)
-                                .disabled(self.refreshing)
-                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                .gap_2()
+                .when(supported.minimize, |el| {
+                    el.child(
+                        control("minimize", IconName::WindowMinimize, false)
+                            .on_click(|_, window, cx| {
+                                cx.stop_propagation();
+                                window.minimize_window();
+                            }),
+                    )
+                })
+                .when(supported.maximize, |el| {
+                    let icon = if window.is_maximized() { IconName::WindowRestore } else { IconName::WindowMaximize };
+                    el.child(control("maximize", icon, false).on_click(|_, window, cx| {
+                        cx.stop_propagation();
+                        window.zoom_window();
+                    }))
+                })
+                .child(control("close", IconName::WindowClose, true).on_click(|_, window, cx| {
+                    cx.stop_propagation();
+                    window.remove_window();
+                }))
+        });
+
+        let (visible, anim) = self.window_bar;
+        h_flex()
+            .id("window-bar")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(WINDOW_BAR_HEIGHT)
+            .rounded_tl(radii.top_left)
+            .rounded_tr(radii.top_right)
+            .pl_3()
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .justify_between()
+            // ダブルクリックで最大化、右クリックでウィンドウのメニュー（移動は大きな写真全体で受け付ける）
+            .on_double_click(|_, window, _| window.zoom_window())
+            .on_mouse_down(MouseButton::Right, |ev, window, _| window.show_window_menu(ev.position))
+            // 明るい写真の上でも白い記号が読めるよう、上端だけ少し暗くする
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(black().opacity(0.42), 0.),
+                linear_color_stop(black().opacity(0.), 1.),
+            ))
+            .child(
+                keep(div()).child(
+                    Button::new("fullscreen")
+                        .small()
+                        .icon(
+                            Icon::new(if fullscreen { IconName::Minimize } else { IconName::Maximize })
+                                .text_color(white()),
                         )
-                        .child(
-                            Button::new("show-favorites")
-                                .small()
-                                .ghost()
-                                .icon(if self.query.favorites { IconName::StarFill } else { IconName::Star })
-                                .tooltip(tr!("favorite.show"))
-                                .selected(self.query.favorites)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_favorites_filter(cx))),
-                        )
-                        .child(
-                            Button::new("settings")
-                                .small()
-                                .ghost()
-                                .label(tr!("settings.title"))
-                                .tooltip(tr!("action.settings_tooltip"))
-                                .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-                        ),
+                        .tooltip(if fullscreen {
+                            tr!("action.exit_fullscreen_tooltip")
+                        } else {
+                            tr!("action.fullscreen_tooltip")
+                        })
+                        .custom(on_photo(cx))
+                        .on_click(|_, window, _| window.toggle_fullscreen()),
                 ),
-        )
+            )
+            .child(
+                keep(h_flex().gap_3()).child(app_buttons).children(controls.map(|c| {
+                    h_flex()
+                        .gap_3()
+                        .child(div().w(px(1.)).h(px(18.)).bg(white().opacity(0.35)))
+                        .child(c)
+                })),
+            )
+            .with_animation(
+                ("window-bar-content", anim),
+                Animation::new(WINDOW_BAR_FADE).with_easing(ease_in_out),
+                move |el, t| el.opacity(if visible { t } else { 1. - t }),
+            )
     }
 
     /// 選んだ写真を全幅で表示する。この画面で唯一の大きな要素。
     /// `hero` は今表示している写真、`loading` は選んだ別の写真の画像を読み込み中かどうか。
-    fn render_hero(&self, hero: Option<Hero>, loading: bool, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn render_hero(
+        &self,
+        hero: Option<Hero>,
+        loading: bool,
+        p: Palette,
+        radii: Corners<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (from, to, anim) = self.hero_height;
         let collapsed = self.hero_collapsed;
         let compact = to < 380.;
-        let frame = div().relative().w_full().flex_none().overflow_hidden().bg(p.surface);
+        // ウィンドウの上の角は丸いので、写真と下地の上の角も同じ丸みにする
+        // （gpui の切り抜きは四角いため、はみ出す要素それぞれに丸みを付ける）
+        let (tl, tr) = (radii.top_left, radii.top_right);
+        let frame = div()
+            .relative()
+            .w_full()
+            .flex_none()
+            .overflow_hidden()
+            .rounded_tl(tl)
+            .rounded_tr(tr)
+            .bg(p.surface);
         // 高さは「開始 → 終了」をアニメーションで変える（スクロールで細く、写真を選ぶと広く）
         let with_height = move |el: Div| {
             el.with_animation(
@@ -1330,13 +1475,13 @@ impl Dashboard {
                 div()
                     .absolute()
                     .inset_0()
-                    .child(img(path).size_full().object_fit(ObjectFit::Cover))
+                    .child(img(path).size_full().rounded_tl(tl).rounded_tr(tr).object_fit(ObjectFit::Cover))
             });
         let image = match &hero.image {
             Some(path) => div()
                 .absolute()
                 .inset_0()
-                .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover))
+                .child(img(path.clone()).size_full().rounded_tl(tl).rounded_tr(tr).object_fit(ObjectFit::Cover))
                 .with_animation(
                     ("hero-fade", self.hero_swap),
                     Animation::new(HERO_FADE).with_easing(ease_in_out),
@@ -1355,7 +1500,7 @@ impl Dashboard {
         let loading_badge = loading.then(|| {
             h_flex()
                 .absolute()
-                .top_3()
+                .top(WINDOW_BAR_HEIGHT + px(8.))
                 .right_4()
                 .gap_2()
                 .px_3()
@@ -1498,6 +1643,8 @@ impl Dashboard {
                     h_flex()
                         .flex_none()
                         .gap_2()
+                        // ボタンを押したときに、ウィンドウの移動が始まらないようにする
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .when(hero.can_apply, |el| el.child(favorite_button))
                         .child(menu_button)
                         .child(button),
@@ -1812,6 +1959,14 @@ impl Dashboard {
             .border_b_1()
             .border_color(p.line)
             .bg(p.surface)
+            .child(
+                div().w(px(320.)).child(
+                    Input::new(&self.search_input)
+                        .small()
+                        .prefix(Icon::new(IconName::Search).small().text_color(p.slate))
+                        .cleanable(true),
+                ),
+            )
             .child({
                 let on = self.query.favorites;
                 h_flex()
@@ -1843,7 +1998,7 @@ impl Dashboard {
             )
     }
 
-    fn render_footer(&self, p: Palette) -> impl IntoElement {
+    fn render_footer(&self, p: Palette, radii: Corners<Pixels>) -> impl IntoElement {
         let busy = self.refreshing
             || self.loading_older
             || self.indexing
@@ -1860,6 +2015,8 @@ impl Dashboard {
             .gap_2()
             .px_4()
             .py_1()
+            .rounded_bl(radii.bottom_left)
+            .rounded_br(radii.bottom_right)
             .bg(p.surface)
             .border_t_1()
             .border_color(p.line)
@@ -1933,6 +2090,12 @@ impl Render for Dashboard {
         if let Some(key) = self.shown.clone() {
             self.request_preview(&key, cx);
         }
+        // タイトルバーは、写真にマウスが乗っているとき（写真がまだ無いときは常に）だけ出す
+        let bar_visible = self.hero_hovered || hero.as_ref().is_none_or(|h| h.image.is_none());
+        if self.window_bar.0 != bar_visible {
+            self.window_bar = (bar_visible, self.window_bar.1 + 1);
+        }
+        let radii = window_corner_radii(window, cx);
         v_flex()
             .size_full()
             .key_context("Dashboard")
@@ -1953,13 +2116,43 @@ impl Render for Dashboard {
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)))
+            .on_action(|_: &ToggleFullscreen, window, _| window.toggle_fullscreen())
             .font_family(theme::FONT)
+            .rounded_tl(radii.top_left)
+            .rounded_tr(radii.top_right)
+            .rounded_bl(radii.bottom_left)
+            .rounded_br(radii.bottom_right)
             .bg(p.fog)
             .text_color(p.ink)
-            .child(self.render_title_bar(p, cx))
             // 大きな写真は上部に固定し、一覧だけをスクロールさせる。
             // 下の方の写真を選んでも、選んだ写真が常に見える。
-            .child(self.render_hero(hero, loading, p, cx))
+            // タイトルバーは写真の上に重ね、写真を窓の上端まで広げる。
+            .child(
+                div()
+                    .id("hero-area")
+                    .relative()
+                    .flex_none()
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        this.hero_hovered = *hovered;
+                        cx.notify();
+                    }))
+                    // 大きな写真（とタイトルバー）を押したまま動かすと、ウィンドウを移動する。
+                    // ボタンの上で押したときは、各ボタンの側で伝播を止めているので移動しない。
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, _| this.window_bar_pressed = true),
+                    )
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.window_bar_pressed = false))
+                    .on_mouse_down_out(cx.listener(|this, _, _, _| this.window_bar_pressed = false))
+                    .on_mouse_move(cx.listener(|this, _, window, _| {
+                        if this.window_bar_pressed {
+                            this.window_bar_pressed = false;
+                            window.start_window_move();
+                        }
+                    }))
+                    .child(self.render_hero(hero, loading, p, radii, cx))
+                    .child(self.render_window_bar(p, radii, window, cx)),
+            )
             .when(self.search_open || self.query.is_active(), |el| el.child(self.render_search_bar(p, cx)))
             .child(
                 div()
@@ -1990,7 +2183,7 @@ impl Render for Dashboard {
                             )),
                     ),
             )
-            .child(self.render_footer(p))
+            .child(self.render_footer(p, radii))
     }
 }
 
@@ -2052,7 +2245,9 @@ fn main() {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(900.)), cx)),
                 window_min_size: Some(size(px(820.), px(560.))),
                 app_id: Some("bing-wallpaper-manager".into()),
-                ..TitleBar::window_options()
+                // 枠はこのアプリが描く（角を丸くし、タイトルバーを大きな写真に重ねるため）
+                window_decorations: Some(WindowDecorations::Client),
+                ..gpui_kit::component::TitleBar::window_options()
             };
             gpui_kit::open_window(options, cx, |window, cx| {
                 theme::apply(window, cx);

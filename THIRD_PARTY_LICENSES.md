@@ -176,26 +176,26 @@ Each crate is distributed under the license shown; see its repository for the fu
 | globwalk | 0.8.1 | MIT | https://github.com/gilnaa/globwalk |
 | glow | 0.17.0 | MIT OR Apache-2.0 OR Zlib | https://github.com/grovesNL/glow |
 | gpu-allocator | 0.28.0 | MIT OR Apache-2.0 | https://github.com/Traverse-Research/gpu-allocator |
-| gpui-base | 0.9.0 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
-| gpui-component | 0.9.0 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
-| gpui-component-macros | 0.9.0 | Apache-2.0 | https://crates.io/crates/gpui-component-macros |
-| gpui-kit | 0.9.0 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
-| gpui-kit-assets | 0.9.0 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
-| gpui-pre | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-collections | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-derive-refineable | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-http-client | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-linux | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-macros | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-platform | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-refineable | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-scheduler | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-shared-string | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-sum-tree | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-util | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-wgpu | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-ztracing | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
-| gpui-pre-ztracing-macro | 0.3.11 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-base | 0.9.1 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
+| gpui-component | 0.9.1 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
+| gpui-component-macros | 0.9.1 | Apache-2.0 | https://crates.io/crates/gpui-component-macros |
+| gpui-kit | 0.9.1 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
+| gpui-kit-assets | 0.9.1 | Apache-2.0 | https://github.com/longbridge/gpui-kit |
+| gpui-pre | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-collections | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-derive-refineable | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-http-client | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-linux | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-macros | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-platform | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-refineable | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-scheduler | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-shared-string | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-sum-tree | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-util | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-wgpu | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-ztracing | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
+| gpui-pre-ztracing-macro | 0.3.12 | Apache-2.0 | https://github.com/zed-industries/zed |
 | granit-parser | 1.3.0 | MIT OR Apache-2.0 | https://github.com/bourumir-wyngs/granit-parser |
 | half | 2.7.1 | MIT OR Apache-2.0 | https://github.com/VoidStarKat/half-rs |
 | harfrust | 0.5.2 | MIT | https://github.com/harfbuzz/harfrust |

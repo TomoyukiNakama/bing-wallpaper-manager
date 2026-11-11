@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use gpui_kit::component::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
-use gpui_kit::{App, Hsla, Window, WindowAppearance, rgb};
+use gpui_kit::{App, Hsla, Window, WindowAppearance, px, rgb};
 
 pub const FONT: &str = "Noto Sans CJK JP";
 
@@ -113,12 +113,17 @@ pub fn is_dark(window: &Window) -> bool {
 }
 
 /// gpui-component の部品（ボタン・タイトルバー・スクロールバー）に配色とフォントを反映する。
+/// ウィンドウの角の丸み。
+pub const WINDOW_RADIUS: f32 = 12.;
+
 pub fn apply(window: &Window, cx: &mut App) {
     let dark = is_dark(window);
     let p = if dark { Palette::dark() } else { Palette::light() };
     Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, None, cx);
     Theme::update(cx, |t| {
         t.font_family = FONT.into();
+        // ウィンドウの角を丸くする（このアプリが枠を描くとき。GNOME の Wayland など）
+        t.window_radius = px(WINDOW_RADIUS);
         let colors = &mut t.colors;
         colors.background = p.fog;
         colors.foreground = p.ink;

@@ -11,6 +11,7 @@ A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them
 ## Features
 
 - **Dashboard**: the selected photo is shown large at the top, with *Today’s photos* and *Earlier photos* (grouped by date) below. The large photo stays pinned above the list, shrinks to a slim bar while you scroll, and expands again when you pick a photo. Switching photos crossfades smoothly once the new image has loaded
+- **Frameless window**: rounded corners, with the large photo reaching the top edge. The title bar (search, favorites, refresh, settings, full screen and the window buttons) appears over the photo only while the mouse is on it; drag the photo to move the window, double-click the top edge to maximize
 - **Today’s photos**: the latest photo from six regions (Japan, United States, United Kingdom, Germany, France, China), grouped by photo with the regions that show it
 - **Set as wallpaper**: sets the GNOME wallpaper for both light and dark styles. The current wallpaper is marked *Current wallpaper*
 - **Favorites**: mark photos with the ☆ button, the right-click menu or Ctrl+D; favorites get a ★ badge, and the ★ button in the title bar shows only your favorites (can be combined with search)
@@ -21,15 +22,15 @@ A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them
   - Press Escape to close the search
 - **Fit**: choose how the photo fits when its shape differs from the monitor, with a preview in the monitor’s proportions (zoom, show the whole photo, stretch, center at original size, span across monitors)
 - **Photo actions**: right-click a photo or use the *…* button on the large photo to set it as the wallpaper, open the image, or show it in its folder
-- **Settings** (top right, Ctrl+,): General (language, theme), Wallpaper (fit), Storage, and About (version, license, libraries used)
+- **Settings** (☰ at the top right, Ctrl+,): General (language, theme), Wallpaper (fit), Storage, and About (version, license, libraries used)
 - **11 languages**: Japanese, English, Chinese (Simplified / Traditional), Korean, German, French, Spanish, Italian, Portuguese and Russian. *Automatic* follows the OS language (`LANG`). Photo titles and descriptions prefer the version shown in a region that uses the selected language
 - **Theme**: match the system, light or dark
-- **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, Ctrl+D to add or remove a favorite, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings
+- **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, Ctrl+D to add or remove a favorite, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings, F11 for full screen
 - **Command line**: `--apply` sets today’s photo as the wallpaper without opening the window
 
 ## Search
 
-Press **Ctrl+F** (or click the search box in the title bar) to search the photos you have saved. While searching, the list shows only the matching photos; click one to see it large at the top, or press Escape to go back.
+Press **Ctrl+F** (or click the 🔍 button in the title bar) to search the photos you have saved. While searching, the list shows only the matching photos; click one to see it large at the top, or press Escape to go back.
 
 ### By words
 
