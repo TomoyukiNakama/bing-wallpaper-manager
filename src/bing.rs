@@ -10,7 +10,8 @@ use serde::Deserialize;
 
 const BING: &str = "https://www.bing.com";
 
-/// ダッシュボードに表示するマーケット（地域）。
+/// Bing が地域ごとの写真を配信しているマーケット（地域）。ダッシュボードに出す地域は設定で選ぶ。
+/// ここに無い地域（ko-KR、en-AU など）は、Bing が世界共通の写真（ROW）を返すので載せない。
 /// （地域コード, 日本語名, 英語名）
 pub const MARKETS: &[(&str, &str, &str)] = &[
     ("ja-JP", "日本", "Japan"),
@@ -19,7 +20,21 @@ pub const MARKETS: &[(&str, &str, &str)] = &[
     ("de-DE", "ドイツ", "Germany"),
     ("fr-FR", "フランス", "France"),
     ("zh-CN", "中国", "China"),
+    ("en-CA", "カナダ（英語）", "Canada (English)"),
+    ("fr-CA", "カナダ（フランス語）", "Canada (French)"),
+    ("en-IN", "インド", "India"),
+    ("es-ES", "スペイン", "Spain"),
+    ("it-IT", "イタリア", "Italy"),
+    ("pt-BR", "ブラジル", "Brazil"),
 ];
+
+/// 設定で選んでいないときに表示する地域の数（MARKETS の先頭から）。
+pub const DEFAULT_MARKET_COUNT: usize = 6;
+
+/// 地域コードを MARKETS にあるもの（`&'static str`）に直す。対応していない地域は None。
+pub fn known_market(code: &str) -> Option<&'static str> {
+    MARKETS.iter().map(|(c, _, _)| *c).find(|c| c.eq_ignore_ascii_case(code))
+}
 
 /// 表示言語での地域名（翻訳キーは `region.ja_jp` のような形）。
 pub fn market_name(code: &str) -> String {
@@ -37,6 +52,9 @@ pub struct BingImage {
     pub copyright: String,
     #[serde(default)]
     pub title: String,
+    /// この写真について Bing で調べるページの URL。
+    #[serde(default)]
+    pub copyrightlink: String,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +168,69 @@ pub fn fetch_recent(mkt: &str) -> Result<Vec<BingImage>> {
     Ok(images)
 }
 
+#[derive(Deserialize)]
+struct Model {
+    #[serde(rename = "MediaContents", default)]
+    contents: Vec<MediaContent>,
+}
+
+#[derive(Deserialize)]
+struct MediaContent {
+    #[serde(rename = "ImageContent")]
+    image: ImageContent,
+}
+
+#[derive(Deserialize)]
+struct ImageContent {
+    #[serde(rename = "Description", default)]
+    description: String,
+    #[serde(rename = "Image")]
+    image: ModelImage,
+}
+
+#[derive(Deserialize)]
+struct ModelImage {
+    #[serde(rename = "Url", default)]
+    url: String,
+}
+
+/// `/th?id=OHR.Foo_JA-JP123_1920x1080.webp` → `OHR.Foo`
+fn key_from_image_url(url: &str) -> Option<String> {
+    let (urlbase, _) = url.rsplit_once('_')?;
+    let image = BingImage {
+        startdate: String::new(),
+        urlbase: urlbase.to_string(),
+        copyright: String::new(),
+        title: String::new(),
+        copyrightlink: String::new(),
+    };
+    let key = image.key();
+    key.starts_with("OHR.").then_some(key)
+}
+
+fn parse_descriptions(model: Model) -> Vec<(String, String)> {
+    model
+        .contents
+        .into_iter()
+        .filter(|c| !c.image.description.trim().is_empty())
+        .filter_map(|c| Some((key_from_image_url(&c.image.image.url)?, c.image.description)))
+        .collect()
+}
+
+/// 最近の写真（約 1 週間分）の解説文を取得する。（写真のキー, 解説文）を返す。
+/// Bing のホームページが使っている API で、HPImageArchive には解説文が無いのでこちらから補う。
+pub fn fetch_descriptions(mkt: &str) -> Result<Vec<(String, String)>> {
+    let url = format!("{BING}/hp/api/model?mkt={mkt}");
+    let model: Model = agent()
+        .get(&url)
+        .call()
+        .with_context(|| tr!("error.bing_fetch", market = mkt))?
+        .body_mut()
+        .read_json()
+        .with_context(|| tr!("error.bing_parse", market = mkt))?;
+    Ok(parse_descriptions(model))
+}
+
 /// `url` を `dest` に保存する。既に存在する場合は何もしない。
 pub fn download(url: &str, dest: &Path) -> Result<()> {
     if fs::metadata(dest).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
@@ -182,7 +263,24 @@ mod tests {
             urlbase: urlbase.into(),
             copyright: "説明 (© 撮影者)".into(),
             title: "Info".into(),
+            copyrightlink: String::new(),
         }
+    }
+
+    #[test]
+    fn reads_descriptions_from_homepage_model() {
+        let json = r#"{"MediaContents":[
+            {"ImageContent":{"Description":"湖の解説","Image":{"Url":"/th?id=OHR.AbrahamCanada_JA-JP9609532400_1920x1080.webp"}}},
+            {"ImageContent":{"Description":"","Image":{"Url":"/th?id=OHR.Empty_JA-JP1_1920x1080.webp"}}}
+        ]}"#;
+        let model: Model = serde_json::from_str(json).unwrap();
+        assert_eq!(parse_descriptions(model), vec![("OHR.AbrahamCanada".to_string(), "湖の解説".to_string())]);
+    }
+
+    #[test]
+    fn known_market_ignores_case() {
+        assert_eq!(known_market("ES-es"), Some("es-ES"));
+        assert_eq!(known_market("ko-KR"), None);
     }
 
     #[test]

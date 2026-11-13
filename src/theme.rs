@@ -128,6 +128,8 @@ pub fn apply(window: &Window, cx: &mut App) {
         t.font_family = FONT.into();
         // ウィンドウの角を丸くする（このアプリが枠を描くとき。GNOME の Wayland など）
         t.window_radius = px(WINDOW_RADIUS);
+        // タイトルバーは大きな写真に重ねているので、横のパネル（Sheet）は窓の上端から出す
+        t.sheet.margin_top = px(0.);
         let colors = &mut t.colors;
         colors.background = p.fog;
         colors.foreground = p.ink;

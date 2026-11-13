@@ -44,6 +44,8 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    使える操作は `click X Y` / `rclick X Y` / `drag X1 Y1 X2 Y2` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
    `type 英小文字・数字・空白` / `sleep 秒` / `shot PATH`。
    撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
+   自動更新のスイッチを入れても、実際の systemd のタイマーは作らない（`BWM_NO_SYSTEMD=1`。ファイルは撮影用の設定フォルダに書かれる）。
+   `--apply` を確かめるときも、同じ環境変数（`XDG_CONFIG_HOME=target/screenshot-fixture/config GSETTINGS_BACKEND=memory`）を付ける。
    写真が多いときの動作（スクロールの重さなど）は、`STORE=<写真が数百枚ある保存先のコピー>` で保存先を差し替えて確かめる
    （撮影はソフトウェア描画なので、実機より遅い）。
    入力は `tools/vpointer`（常駐する仮想マウス・キーボード）で送る。wlrctl はコマンドごとにマウスを作り直すため、
@@ -59,7 +61,14 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 ## 構成とデザイン方針
 
 - `src/bing.rs` Bing API・ダウンロード / `src/library.rs` 保存先への保管 / `src/config.rs` 設定 /
-  `src/theme.rs` 配色とフォント / `src/wallpaper.rs` gsettings / `src/main.rs` UI と CLI（`--apply`）
+  `src/theme.rs` 配色とフォント / `src/wallpaper.rs` gsettings / `src/main.rs` UI と CLI（`--apply`） /
+  `src/info.rs` 写真の情報のパネル / `src/schedule.rs` 自動更新（systemd のユーザータイマー） / `src/single.rs` 二重起動の防止
+- 地域は `bing::MARKETS`（Bing が地域ごとの写真を配信しているものだけ）から設定で選ぶ。ダッシュボードは `Dashboard::markets`
+  （選んだ地域）を使い、`MARKETS` を直接回さない。地域を足すときは `region.xx_yy` の訳も全言語に足す。
+- 削除した写真のキーは `.bing-wallpaper/deleted.txt` に覚え、更新や古い写真の読み込みで取得し直さない（今日の写真として配信されたら戻す）。
+- 解説文は、最近の写真は Bing のホームページの API（`bing::fetch_descriptions`）、古い写真はアーカイブから補う。
+- ウィンドウの大きさなど、設定ではない状態は `state.json`（`config::State`）に置く。大きさは影を除いて覚える
+  （`window_paddings`。除かないと起動のたびに 40px ずつ広がる）。
 - 保存先には UHD 画像を置き、`.bing-wallpaper/meta`・`.bing-wallpaper/thumbs` にメタデータとサムネイルを置く。
   同じ写真は地域や配信日が違っても `OHR.名前` をキーに 1 枚だけ保存する。
 - ウィンドウは枠をアプリが描き（`WindowDecorations::Client`）、角を丸くする（`theme::WINDOW_RADIUS`）。gpui の切り抜きは四角いので、
@@ -78,7 +87,10 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 - 画面の文言はコードに直接書かず、`locales/*.yml`（11 言語）にキーを追加して `tr!("キー")` / `tr!("キー", count = n)` で参照する。
   新しいキーは全言語のファイルに追加する（`cargo test` の `every_language_has_every_key` で確認される）。差し込みは `%{name}`。
   各言語の見た目は `BWM_LANG=de scripts/screenshot.sh ...` のように言語を固定して撮影して確認する。
-- 設定ダイアログ（SettingsView）は Dashboard の更新中に作られる。`SettingsView::new` の中で Dashboard を read しない（パニックする）。
+- 設定ダイアログ（SettingsView）と写真の情報（InfoView）は Dashboard の更新中に作られる。`new` の中で Dashboard を read しない（パニックする）。
+  開くときに要る値は `settings::Init` で渡す。
+- 横のパネル（Sheet）とダイアログの暗幕は Dashboard が窓の形に合わせて描く。Sheet は窓の右の角に接するので、角を丸める。
+- `use gpui_kit::*` をしているファイルのテストでは `use super::*` をしない（gpui の `test` マクロが取り込まれ、`#[test]` がコンパイルできない）。
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。
 - README は英語版（`README.md`、GitHub の既定）と日本語版（`README.ja.md`）の 2 つ。機能を変えたら両方を同じ内容に更新する。

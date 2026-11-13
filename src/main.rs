@@ -1,6 +1,8 @@
 #[macro_use]
 mod i18n;
 
+mod info;
+
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod archive;
@@ -8,8 +10,10 @@ mod bing;
 mod colors;
 mod config;
 mod library;
+mod schedule;
 mod search;
 mod settings;
+mod single;
 mod theme;
 mod wallpaper;
 
@@ -31,8 +35,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use bing::{BingImage, MARKETS};
-use config::{Config, FitMode, Language, ThemePref};
+use bing::BingImage;
+use config::{AutoUpdate, Config, FitMode, Language, ThemePref};
 use archive::ArchivePhoto;
 use library::{Library, PhotoSource, StoredImage};
 use colors::ColorBucket;
@@ -51,7 +55,9 @@ gpui_kit::actions!(
         FocusSearch,
         CloseSearch,
         ToggleFavorite,
-        ToggleFullscreen
+        ToggleFullscreen,
+        ShowInfo,
+        DeleteSelected
     ]
 );
 
@@ -69,6 +75,8 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-d", ToggleFavorite, ctx),
         KeyBinding::new("escape", CloseSearch, ctx),
         KeyBinding::new("f11", ToggleFullscreen, ctx),
+        KeyBinding::new("ctrl-i", ShowInfo, ctx),
+        KeyBinding::new("delete", DeleteSelected, ctx),
     ]
 }
 
@@ -96,6 +104,8 @@ enum ListItem {
     /// 「さらに古い写真を読み込む」
     LoadOlder,
 }
+/// 起動したままのとき、新しい写真を確かめに行く間隔。
+const AUTO_REFRESH: Duration = Duration::from_secs(60 * 60);
 /// 「さらに古い写真を読み込む」で一度に読み込む日数。
 const OLDER_DAYS: usize = 30;
 /// フッターの高さ（大きな写真の高さの計算用）。タイトルバーは大きな写真に重ねるので含めない。
@@ -143,11 +153,35 @@ struct Hero {
     /// 壁紙用の画像が手元にあるか（「画像を開く」などに使う）
     can_open: bool,
     current: bool,
+    /// 削除できるか（今日の写真と今の壁紙は削除できない）
+    can_delete: bool,
+}
+
+/// 写真のメニューで、どの操作ができるか。
+#[derive(Clone, Copy)]
+struct PhotoActions {
+    can_apply: bool,
+    can_open: bool,
+    can_delete: bool,
+    current: bool,
+    favorite: bool,
 }
 
 struct Dashboard {
     config: Config,
     library: Library,
+    /// ダッシュボードに出す地域（設定で選んだもの）。latest と同じ並び
+    markets: Vec<&'static str>,
+    /// 削除した写真のキー（更新や古い写真の読み込みで取得し直さない）
+    deleted: HashSet<String>,
+    /// 最後に更新を始めた時刻（起動したままのとき、1 時間ごとに確かめ直す）
+    last_refresh: std::time::Instant,
+    /// 自動更新の設定に失敗したときのエラー（設定画面に出す）
+    auto_error: Option<SharedString>,
+    /// 保存先の使用量（設定画面を開いたときに数える）
+    usage: Option<u64>,
+    /// ウィンドウの大きさの保存を間引くための番号
+    bounds_save: usize,
     stored: Vec<StoredImage>,
     /// stored の索引（キー → 位置）。写真が数百枚あっても描画中の検索を速くするため
     stored_index: HashMap<String, usize>,
@@ -211,11 +245,13 @@ struct Dashboard {
     preload: (Option<String>, u64, Vec<PathBuf>),
     _appearance: Subscription,
     _search_events: Subscription,
+    _bounds: Subscription,
 }
 
-fn markets_label(markets: impl IntoIterator<Item = String>) -> String {
+/// `all` は、表示している地域のすべてで配信されたか。
+fn markets_label(markets: impl IntoIterator<Item = String>, all: bool) -> String {
     let names: Vec<String> = markets.into_iter().collect();
-    if names.len() == MARKETS.len() {
+    if all && names.len() > 1 {
         tr!("hero.shown_all", count = names.len())
     } else {
         tr!("hero.shown_in", regions = names.join(tr!("list.separator").as_ref()))
@@ -223,9 +259,9 @@ fn markets_label(markets: impl IntoIterator<Item = String>) -> String {
 }
 
 /// タイル用の短い地域表記。
-fn regions_caption(names: &[String]) -> String {
+fn regions_caption(names: &[String], all: bool) -> String {
     match names.len() {
-        n if n == MARKETS.len() => tr!("tile.all_regions").to_string(),
+        n if all && n > 1 => tr!("tile.all_regions").to_string(),
         0..=3 => names.join(tr!("list.separator").as_ref()),
         n => tr!("tile.regions_more", regions = names[..2].join(tr!("list.separator").as_ref()), count = n - 2),
     }
@@ -255,6 +291,24 @@ impl Dashboard {
         });
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+        // ウィンドウの大きさを覚えておき、次の起動で同じ大きさにする
+        let bounds = cx.observe_window_bounds(window, |this, window, cx| this.remember_window_size(window, cx));
+        // 起動したままでも、日付が変わったあとの写真が出るように、定期的に確かめ直す
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(10 * 60)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.last_refresh.elapsed() >= AUTO_REFRESH {
+                        this.refresh(cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        let markets = config.markets();
         let mut this = Self {
             focus_handle,
             list_state: {
@@ -272,12 +326,19 @@ impl Dashboard {
             margin_color: wallpaper::primary_color().map(|c| rgb(c).into()).unwrap_or(black()),
             stored: Vec::new(),
             stored_index: HashMap::new(),
+            deleted: library.deleted_keys(),
+            last_refresh: std::time::Instant::now(),
+            auto_error: None,
+            usage: None,
+            bounds_save: 0,
+            _bounds: bounds,
             config,
             library,
-            latest: MARKETS
+            latest: markets
                 .iter()
                 .map(|_| MarketLatest { info: None, state: LatestState::Loading })
                 .collect(),
+            markets,
             selected: None,
             shown: None,
             current_uri: wallpaper::current_uri(),
@@ -335,14 +396,21 @@ impl Dashboard {
     }
 
     fn upsert(&mut self, image: StoredImage) {
-        match self.stored_index.get(&image.key) {
-            Some(&i) => self.stored[i] = image,
+        let moved = match self.stored_index.get(&image.key) {
+            // ほかの地域での配信で日付が新しくなったら、並べ直す
+            Some(&i) => {
+                let moved = self.stored[i].startdate != image.startdate;
+                self.stored[i] = image;
+                moved
+            }
             None => {
                 self.stored.push(image);
-                self.stored
-                    .sort_by(|a, b| b.startdate.cmp(&a.startdate).then(a.key.cmp(&b.key)));
-                self.rebuild_index();
+                true
             }
+        };
+        if moved {
+            self.stored.sort_by(|a, b| b.startdate.cmp(&a.startdate).then(a.key.cmp(&b.key)));
+            self.rebuild_index();
         }
     }
 
@@ -374,7 +442,7 @@ impl Dashboard {
         for photo in &mut photos {
             let best = preferred
                 .iter()
-                .find_map(|code| photo.markets.iter().find(|&&i| MARKETS[i].0 == *code));
+                .find_map(|code| photo.markets.iter().find(|&&i| self.markets[i] == *code));
             if let Some(info) = best.and_then(|&i| self.latest[i].info.clone()) {
                 photo.info = info;
             }
@@ -400,18 +468,23 @@ impl Dashboard {
         let can_apply = stored.is_some();
         let can_open = stored.is_some_and(|s| s.image_file.is_some());
         let current = stored.is_some_and(|s| self.is_current(s));
+        let can_delete = self.can_delete(&key, today);
 
         if let Some(photo) = today.iter().find(|p| p.key == key) {
             return Some(Hero {
                 title: photo.info.display_title(),
                 description: photo.info.copyright.clone(),
                 startdate: photo.info.startdate.clone(),
-                markets: markets_label(photo.markets.iter().map(|&i| bing::market_name(MARKETS[i].0).to_string())),
+                markets: markets_label(
+                    photo.markets.iter().map(|&i| bing::market_name(self.markets[i])),
+                    photo.markets.len() == self.markets.len(),
+                ),
                 key,
                 image,
                 can_apply,
                 can_open,
                 current,
+                can_delete,
             });
         }
         let s = stored?;
@@ -419,13 +492,35 @@ impl Dashboard {
             title: s.display_title(),
             description: s.display_copyright().to_string(),
             startdate: s.startdate.clone(),
-            markets: markets_label(s.markets.iter().map(|m| bing::market_name(m).to_string())),
+            markets: markets_label(s.markets.iter().map(|m| bing::market_name(m)), self.in_all_markets(s)),
             key,
             image,
             can_apply,
             can_open,
             current,
+            can_delete,
         })
+    }
+
+    /// 表示している地域のすべてで配信された写真か。
+    fn in_all_markets(&self, image: &StoredImage) -> bool {
+        self.markets.iter().all(|m| image.markets.iter().any(|x| x == m))
+    }
+
+    /// 写真を削除できるか。今日の写真（更新のたびに戻ってくる）と今の壁紙は削除できない。
+    fn can_delete(&self, key: &str, today: &[TodayPhoto]) -> bool {
+        self.find_stored(key).is_some_and(|s| !self.is_current(s)) && !today.iter().any(|p| p.key == key)
+    }
+
+    fn photo_actions(&self, key: &str, today: &[TodayPhoto]) -> PhotoActions {
+        let stored = self.find_stored(key);
+        PhotoActions {
+            can_apply: stored.is_some(),
+            can_open: stored.is_some_and(|s| s.image_file.is_some()),
+            can_delete: self.can_delete(key, today),
+            current: stored.is_some_and(|s| self.is_current(s)),
+            favorite: stored.is_some_and(|s| s.favorite),
+        }
     }
 
     /// 全地域の画像一覧を取得し、最新のものから順に保存先へ保管する。
@@ -434,6 +529,7 @@ impl Dashboard {
             return;
         }
         self.refreshing = true;
+        self.last_refresh = std::time::Instant::now();
         self.progress = tr!("status.checking").into();
         for latest in &mut self.latest {
             latest.state = LatestState::Loading;
@@ -442,14 +538,12 @@ impl Dashboard {
 
         let generation = self.generation;
         let library = self.library.clone();
+        let markets = self.markets.clone();
+        let deleted = self.deleted.clone();
         cx.spawn(async move |this, cx| {
-            let tasks: Vec<_> = MARKETS
+            let tasks: Vec<_> = markets
                 .iter()
-                .map(|(code, _, _)| {
-                    let code = code.to_string();
-                    cx.background_executor()
-                        .spawn(async move { bing::fetch_recent(&code) })
-                })
+                .map(|&code| cx.background_executor().spawn(async move { bing::fetch_recent(code) }))
                 .collect();
             let mut archives = Vec::new();
             for task in tasks {
@@ -468,6 +562,8 @@ impl Dashboard {
                     queue.extend(images.iter().skip(1).map(|img| (i, img.clone(), false)));
                 }
             }
+            // 削除した写真は取得し直さない（今日の写真としてまた配信されたときは保管する）
+            queue.retain(|(_, image, is_latest)| *is_latest || !deleted.contains(&image.key()));
 
             let ok = this
                 .update(cx, |this, cx| {
@@ -494,10 +590,16 @@ impl Dashboard {
             let mut failures = archives.iter().filter(|a| a.is_err()).count();
             for (n, (i, image, is_latest)) in queue.into_iter().enumerate() {
                 let lib = library.clone();
-                let market = MARKETS[i].0;
+                let market = markets[i];
+                let restore = deleted.contains(&image.key());
                 let result = cx
                     .background_executor()
-                    .spawn(async move { lib.store(&PhotoSource::from_bing(&image, market), &[market], true) })
+                    .spawn(async move {
+                        if restore {
+                            lib.forget_deleted(&image.key())?;
+                        }
+                        lib.store(&PhotoSource::from_bing(&image, market), &[market], true)
+                    })
                     .await;
                 let ok = this
                     .update(cx, |this, cx| {
@@ -506,6 +608,7 @@ impl Dashboard {
                         }
                         match result {
                             Ok(stored) => {
+                                this.deleted.remove(&stored.key);
                                 this.upsert(stored);
                                 if is_latest {
                                     this.latest[i].state = LatestState::Ready;
@@ -531,9 +634,36 @@ impl Dashboard {
                 }
             }
 
+            // 最近の写真の解説文を補う（「写真の情報」と検索で使う）。取得できなくても続ける
+            this.update(cx, |this, cx| {
+                this.progress = tr!("status.descriptions").into();
+                cx.notify();
+            })
+            .ok();
+            let described = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut updated = Vec::new();
+                    for market in markets {
+                        match bing::fetch_descriptions(market) {
+                            Ok(list) => updated.extend(
+                                list.iter().filter_map(|(key, text)| library.add_description(key, market, text)),
+                            ),
+                            Err(err) => eprintln!("descriptions: {err:#}"),
+                        }
+                    }
+                    updated
+                })
+                .await;
+
             this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
+                }
+                for image in described {
+                    if this.stored_index.contains_key(&image.key) {
+                        this.upsert(image);
+                    }
                 }
                 this.refreshing = false;
                 this.analyze_missing_colors(cx);
@@ -637,13 +767,16 @@ impl Dashboard {
         let generation = self.generation;
         let library = self.library.clone();
         let cached = self.archive.clone();
-        let stored_keys: HashSet<String> = self.stored.iter().map(|s| s.key.clone()).collect();
+        // 保管済みの写真と、削除した写真は読み込まない
+        let stored_keys: HashSet<String> =
+            self.stored.iter().map(|s| s.key.clone()).chain(self.deleted.iter().cloned()).collect();
+        let markets = self.markets.clone();
         cx.spawn(async move |this, cx| {
             let archive = match cached {
                 Some(archive) => archive,
                 None => {
                     let (photos, errors) =
-                        cx.background_executor().spawn(async move { archive::fetch_all() }).await;
+                        cx.background_executor().spawn(async move { archive::fetch_all(&markets) }).await;
                     for err in &errors {
                         eprintln!("archive: {err:#}");
                     }
@@ -774,15 +907,244 @@ impl Dashboard {
         }
         self.library = Library::new(self.config.save_dir());
         self.set_stored(self.library.load_all());
-        self.older_exhausted = false;
-        self.loading_older = false;
-        self.generation += 1;
-        self.refreshing = false;
+        self.deleted = self.library.deleted_keys();
+        self.usage = None;
+        self.measure_usage(cx);
+        self.restart_loading();
         self.set_status(
             tr!("status.storage_changed", path = self.library.dir().display()),
             false,
         );
         self.refresh(cx);
+    }
+
+    /// 進行中の取得をやめて、最初からやり直せるようにする（保存先や地域を変えたとき）。
+    fn restart_loading(&mut self) {
+        self.older_exhausted = false;
+        self.loading_older = false;
+        self.generation += 1;
+        self.refreshing = false;
+    }
+
+    /// 表示する地域を変える。少なくとも 1 つは残す。
+    fn set_market_enabled(&mut self, code: &'static str, enabled: bool, cx: &mut Context<Self>) {
+        let mut markets = self.markets.clone();
+        markets.retain(|m| *m != code);
+        if enabled {
+            markets.push(code);
+        }
+        if markets.is_empty() {
+            return;
+        }
+        self.config.markets = Some(markets.iter().map(|m| m.to_string()).collect());
+        self.save_config(cx);
+        // MARKETS の順に並べ直したものを使う
+        self.markets = self.config.markets();
+        self.latest = self.markets.iter().map(|_| MarketLatest { info: None, state: LatestState::Loading }).collect();
+        // アーカイブの一覧と解説文は地域ごとなので、取り直す
+        self.archive = None;
+        self.descriptions_ready = false;
+        self.restart_loading();
+        self.refresh(cx);
+        // 自動更新の地域が外れたら、タイマーも作り直す
+        if self.config.auto.enabled {
+            self.set_auto(self.config.auto.clone(), cx);
+        }
+    }
+
+    /// 壁紙の自動更新の設定を変え、systemd のタイマーを作り直す。
+    fn set_auto(&mut self, mut auto: AutoUpdate, cx: &mut Context<Self>) {
+        // 「今日の写真」の地域は、表示している地域から選ぶ
+        if auto.market.as_deref().is_some_and(|m| !self.markets.iter().any(|x| *x == m)) {
+            auto.market = None;
+        }
+        let previous = std::mem::replace(&mut self.config.auto, auto.clone());
+        self.auto_error = None;
+        self.save_config(cx);
+        cx.notify();
+        let market = self.config.auto_market();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { schedule::apply(&auto, market) }).await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = result {
+                    // タイマーを作れなかったら、設定を元に戻してエラーを設定画面に出す
+                    this.config.auto = previous;
+                    this.save_config(cx);
+                    this.auto_error = Some(format!("{err:#}").into());
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 保存先の使用量を裏で数える（設定画面に出す）。
+    fn measure_usage(&mut self, cx: &mut Context<Self>) {
+        let library = self.library.clone();
+        cx.spawn(async move |this, cx| {
+            let usage = cx.background_executor().spawn(async move { library.usage() }).await;
+            this.update(cx, |this, cx| {
+                this.usage = Some(usage);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// ウィンドウの大きさを覚える（大きさを変えている間は書き込まず、落ち着いてから保存する）。
+    fn remember_window_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let WindowBounds::Windowed(bounds) = window.window_bounds() else { return };
+        // 枠をアプリが描くときは、影の分だけ外側に広い。次の起動で大きくならないよう、影を除いた大きさを覚える
+        let shadow = gpui_kit::component::window_paddings(window);
+        let size = (
+            f32::from(bounds.size.width - shadow.left - shadow.right),
+            f32::from(bounds.size.height - shadow.top - shadow.bottom),
+        );
+        self.bounds_save += 1;
+        let id = self.bounds_save;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            if this.update(cx, |this, _| this.bounds_save == id).unwrap_or(false) {
+                cx.background_executor()
+                    .spawn(async move {
+                        if let Err(err) = config::State::update(|state| state.window = Some(size)) {
+                            eprintln!("state: {err:#}");
+                        }
+                    })
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    /// 写真を削除してよいか確かめる。
+    fn confirm_delete(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let today = self.today_photos();
+        if !self.can_delete(key, &today) {
+            return;
+        }
+        let Some(title) = self.find_stored(key).map(|s| s.display_title()) else { return };
+        let entity = cx.entity().downgrade();
+        let key = key.to_string();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = entity.clone();
+            let key = key.clone();
+            alert
+                .confirm()
+                .title(tr!("delete.title", title = title))
+                .description(tr!("delete.body"))
+                .ok_text(tr!("action.delete"))
+                .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                .cancel_text(tr!("action.cancel"))
+                .on_ok(move |_, _, cx| {
+                    entity.update(cx, |this, cx| this.delete(&key, cx)).ok();
+                    true
+                })
+        });
+        cx.notify();
+    }
+
+    /// 写真を保存先から削除する。選んでいた写真なら、隣の写真に移る。
+    fn delete(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(&index) = self.stored_index.get(key) else { return };
+        if self.shown.as_deref() == Some(key) {
+            let keys = self.ordered_keys();
+            let position = keys.iter().position(|k| k == key);
+            self.selected = position.and_then(|i| keys.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| keys.get(j)))).cloned();
+        }
+        let image = self.stored.remove(index);
+        self.rebuild_index();
+        self.deleted.insert(image.key.clone());
+        self.usage = None;
+        self.set_status(tr!("status.deleted", title = image.display_title()), false);
+        cx.notify();
+        let library = self.library.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { library.delete(&image) }).await;
+            if let Err(err) = result {
+                this.update(cx, |this, cx| {
+                    this.set_status(format!("{err:#}"), true);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// 写真の情報（解説文など）を横のパネルに出す。
+    fn open_info(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.shown.clone() else { return };
+        // 解説文がまだ無い古い写真は、アーカイブから補う
+        if self.find_stored(&key).is_some_and(|s| s.descriptions.is_empty()) {
+            self.ensure_descriptions(cx);
+        }
+        let dashboard = cx.entity();
+        let view = cx.new(|cx| info::InfoView::new(dashboard, cx));
+        let weak = cx.entity().downgrade();
+        let radii = window_corner_radii(window, cx);
+        window.open_sheet(cx, move |sheet, _, _| {
+            let weak = weak.clone();
+            sheet
+                .title(tr!("info.title"))
+                .size(px(420.))
+                // 窓の右の角に接するので、同じ丸みにする
+                .rounded_tr(radii.top_right)
+                .rounded_br(radii.bottom_right)
+                .child(view.clone())
+                .on_close(move |_, _, cx| {
+                    weak.update(cx, |_, cx| cx.notify()).ok();
+                })
+        });
+        cx.notify();
+    }
+
+    /// 題名と撮影地（著作権表示を含む）をクリップボードにコピーする。
+    fn copy_caption(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(image) = self.find_stored(key) else { return };
+        let text = format!("{}\n{}", image.display_title(), image.display_copyright());
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.set_status(tr!("status.copied"), false);
+        cx.notify();
+    }
+
+    /// この写真について Bing で調べるページを、ブラウザーで開く。
+    fn open_bing(&mut self, key: &str, cx: &mut Context<Self>) {
+        if let Some(image) = self.find_stored(key) {
+            cx.open_url(&image.bing_link());
+        }
+    }
+
+    /// 一覧を、その年月の最初の写真までスクロールする（`month` は `202611` の形）。
+    fn jump_to_month(&mut self, month: &str, cx: &mut Context<Self>) {
+        let ix = self.list_items.iter().position(|item| match item {
+            ListItem::Groups(groups) => groups.iter().any(|(date, _)| date.starts_with(month)),
+            _ => false,
+        });
+        if let Some(ix) = ix {
+            self.list_state.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+            // 一覧を広く使えるように、大きな写真は細い帯にする
+            self.hero_collapsed = true;
+            cx.notify();
+        }
+    }
+
+    /// 過去の写真がある年月（新しい順、`202611` の形）。
+    fn past_months(&self) -> Vec<String> {
+        let mut months: Vec<String> = Vec::new();
+        for item in &self.list_items {
+            let ListItem::Groups(groups) = item else { continue };
+            for (date, _) in groups {
+                let month = date.get(..6).unwrap_or(date);
+                if months.last().map(String::as_str) != Some(month) {
+                    months.push(month.to_string());
+                }
+            }
+        }
+        months.dedup();
+        months
     }
 
     fn select(&mut self, key: String, cx: &mut Context<Self>) {
@@ -951,7 +1313,13 @@ impl Dashboard {
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dashboard = cx.entity();
         let language = self.config.language;
-        let view = cx.new(|cx| SettingsView::new(dashboard, language, window, cx));
+        let init = settings::Init {
+            language,
+            auto: self.config.auto.clone(),
+            markets: self.markets.clone(),
+        };
+        self.measure_usage(cx);
+        let view = cx.new(|cx| SettingsView::new(dashboard, init, window, cx));
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
@@ -1084,12 +1452,13 @@ impl Dashboard {
         let library = self.library.clone();
         let cached = self.archive.clone();
         let stored_keys: HashSet<String> = self.stored.iter().map(|s| s.key.clone()).collect();
+        let markets = self.markets.clone();
         cx.spawn(async move |this, cx| {
             let archive = match cached {
                 Some(archive) => Some(archive),
                 None => {
                     let (photos, errors) =
-                        cx.background_executor().spawn(async move { archive::fetch_all() }).await;
+                        cx.background_executor().spawn(async move { archive::fetch_all(&markets) }).await;
                     for err in &errors {
                         eprintln!("archive: {err:#}");
                     }
@@ -1268,31 +1637,40 @@ impl Dashboard {
     }
 
     /// 写真に対する操作のメニュー（右クリックと、大きな写真の「…」ボタンで共通）。
-    fn photo_menu(
-        entity: WeakEntity<Self>,
-        key: String,
-        can_apply: bool,
-        can_open: bool,
-        current: bool,
-        favorite: bool,
-        menu: PopupMenu,
-    ) -> PopupMenu {
-        let item = |label: String, f: fn(&mut Self, &str, &mut Context<Self>)| {
+    fn photo_menu(entity: WeakEntity<Self>, key: String, actions: PhotoActions, menu: PopupMenu) -> PopupMenu {
+        let item = |label: String, f: fn(&mut Self, &str, &mut Window, &mut Context<Self>)| {
             let entity = entity.clone();
             let key = key.clone();
-            PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                entity.update(cx, |this, cx| f(this, &key, cx)).ok();
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                entity.update(cx, |this, cx| f(this, &key, window, cx)).ok();
             })
         };
+        let PhotoActions { can_apply, can_open, can_delete, current, favorite } = actions;
         let favorite_label = if favorite { tr!("favorite.remove") } else { tr!("favorite.add") };
         menu.item(
-            item(tr!("action.set_wallpaper"), |this, key, cx| this.apply(key.to_string(), cx))
+            item(tr!("action.set_wallpaper"), |this, key, _, cx| this.apply(key.to_string(), cx))
                 .disabled(!can_apply || current),
         )
-        .item(item(favorite_label, |this, key, cx| this.toggle_favorite(key, cx)).disabled(!can_apply))
+        .item(item(favorite_label, |this, key, _, cx| this.toggle_favorite(key, cx)).disabled(!can_apply))
         .separator()
-        .item(item(tr!("action.open_image"), |this, key, cx| this.reveal(key, true, cx)).disabled(!can_open))
-        .item(item(tr!("action.show_in_folder"), |this, key, cx| this.reveal(key, false, cx)).disabled(!can_open))
+        .item(
+            item(tr!("action.info"), |this, key, window, cx| {
+                this.select(key.to_string(), cx);
+                this.shown = Some(key.to_string());
+                this.open_info(window, cx);
+            })
+            .disabled(!can_apply),
+        )
+        .item(item(tr!("action.open_bing"), |this, key, _, cx| this.open_bing(key, cx)).disabled(!can_apply))
+        .item(item(tr!("action.copy_caption"), |this, key, _, cx| this.copy_caption(key, cx)).disabled(!can_apply))
+        .separator()
+        .item(item(tr!("action.open_image"), |this, key, _, cx| this.reveal(key, true, cx)).disabled(!can_open))
+        .item(item(tr!("action.show_in_folder"), |this, key, _, cx| this.reveal(key, false, cx)).disabled(!can_open))
+        .separator()
+        .item(
+            item(tr!("action.delete_photo"), |this, key, window, cx| this.confirm_delete(key, window, cx))
+                .disabled(!can_delete),
+        )
     }
 
     // ---- 描画 ----
@@ -1577,9 +1955,14 @@ impl Dashboard {
         let key = hero.key.clone();
         let menu_button = {
             let entity = cx.entity().downgrade();
-            let (key, can_apply, can_open, current) =
-                (hero.key.clone(), hero.can_apply, hero.can_open, hero.current);
-            let favorite = self.is_favorite(&key);
+            let key = hero.key.clone();
+            let actions = PhotoActions {
+                can_apply: hero.can_apply,
+                can_open: hero.can_open,
+                can_delete: hero.can_delete,
+                current: hero.current,
+                favorite: self.is_favorite(&key),
+            };
             // 写真の上に置くので、「壁紙に設定中」と同じ暗い下地と白い記号にする
             // （ButtonCustomVariant は背景を 20% ほどに薄めて使うため、ここでは直接指定する）
             Button::new("photo-menu")
@@ -1595,10 +1978,23 @@ impl Dashboard {
                 .bg(black().opacity(0.55))
                 .border_1()
                 .border_color(white().opacity(0.28))
-                .dropdown_menu(move |menu, _, _| {
-                    Self::photo_menu(entity.clone(), key.clone(), can_apply, can_open, current, favorite, menu)
-                })
+                .dropdown_menu(move |menu, _, _| Self::photo_menu(entity.clone(), key.clone(), actions, menu))
         };
+        // 解説文などを横のパネルに出す
+        let info_button = Button::new("info")
+            .icon(Icon::new(IconName::Info).text_color(white()))
+            .tooltip(format!("{}（Ctrl+I）", tr!("action.info")))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(black())
+                    .foreground(white())
+                    .hover(black().opacity(0.75))
+                    .active(black().opacity(0.85)),
+            )
+            .bg(black().opacity(0.55))
+            .border_1()
+            .border_color(white().opacity(0.28))
+            .on_click(cx.listener(|this, _, window, cx| this.open_info(window, cx)));
         let favorite_button = {
             let favorite = self.is_favorite(&hero.key);
             let key = hero.key.clone();
@@ -1706,7 +2102,7 @@ impl Dashboard {
                         .gap_2()
                         // ボタンを押したときに、ウィンドウの移動が始まらないようにする
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .when(hero.can_apply, |el| el.child(favorite_button))
+                        .when(hero.can_apply, |el| el.child(info_button).child(favorite_button))
                         .child(menu_button)
                         .child(button),
                 ),
@@ -1722,27 +2118,23 @@ impl Dashboard {
         key: &str,
         title: String,
         caption: String,
-        current: bool,
+        actions: PhotoActions,
         p: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let PhotoActions { current, favorite, .. } = actions;
         let selected = self.shown.as_deref() == Some(key);
         let thumb = self.library.thumb_path(key);
         let key_owned = key.to_string();
-        let can_apply = self.find_stored(key).is_some();
-        let can_open = self.find_stored(key).is_some_and(|s| s.image_file.is_some());
         let entity = cx.entity().downgrade();
         let menu_key = key.to_string();
-        let favorite = self.is_favorite(key);
         v_flex()
             .id(id.into())
             .w(px(width))
             .flex_none()
             .gap_1p5()
             .on_click(cx.listener(move |this, _, _, cx| this.select(key_owned.clone(), cx)))
-            .context_menu(move |menu, _, _| {
-                Self::photo_menu(entity.clone(), menu_key.clone(), can_apply, can_open, current, favorite, menu)
-            })
+            .context_menu(move |menu, _, _| Self::photo_menu(entity.clone(), menu_key.clone(), actions, menu))
             .child(
                 div()
                     .w_full()
@@ -1819,20 +2211,20 @@ impl Dashboard {
             .iter()
             .enumerate()
             .filter(|(_, l)| l.info.is_none() && matches!(l.state, LatestState::Failed))
-            .map(|(i, _)| bing::market_name(MARKETS[i].0))
+            .map(|(i, _)| bing::market_name(self.markets[i]))
             .collect();
         let tiles: Vec<AnyElement> = today
             .iter()
             .map(|photo| {
-                let current = self.find_stored(&photo.key).is_some_and(|s| self.is_current(s));
-                let regions = photo.markets.iter().map(|&i| bing::market_name(MARKETS[i].0)).collect::<Vec<_>>();
+                let actions = self.photo_actions(&photo.key, today);
+                let regions = photo.markets.iter().map(|&i| bing::market_name(self.markets[i])).collect::<Vec<_>>();
                 self.tile(
                     SharedString::from(format!("today-{}", photo.key)),
                     300.,
                     &photo.key,
                     photo.info.display_title(),
-                    regions_caption(&regions),
-                    current,
+                    regions_caption(&regions, photo.markets.len() == self.markets.len()),
+                    actions,
                     p,
                     cx,
                 )
@@ -1865,7 +2257,7 @@ impl Dashboard {
             bing::date_text(&s.startdate, true)
         } else {
             let regions = s.markets.iter().map(|m| bing::market_name(m)).collect::<Vec<_>>();
-            regions_caption(&regions)
+            regions_caption(&regions, self.in_all_markets(s))
         };
         self.tile(
             SharedString::from(format!("tile-{key}")),
@@ -1873,7 +2265,7 @@ impl Dashboard {
             key,
             s.display_title(),
             caption,
-            self.is_current(s),
+            self.photo_actions(key, &self.today_photos()),
             p,
             cx,
         )
@@ -1894,11 +2286,17 @@ impl Dashboard {
             ListItem::PastHeading(total) => (
                 v_flex()
                     .gap_4()
-                    .child(Self::section_heading(
-                        tr!("past.title"),
-                        (total > 0).then(|| tr!("past.count", count = total)),
-                        p,
-                    ))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(Self::section_heading(
+                                tr!("past.title"),
+                                (total > 0).then(|| tr!("past.count", count = total)),
+                                p,
+                            ))
+                            .child(div().flex_1())
+                            .children(self.render_month_jump(cx)),
+                    )
                     .when(total == 0, |el| {
                         el.child(div().text_sm().text_color(p.slate).child(tr!("past.empty")))
                     })
@@ -1983,6 +2381,57 @@ impl Dashboard {
             .pb(px(bottom))
             .child(body)
             .into_any_element()
+    }
+
+    /// 「年月へ移動」のボタン。過去の写真が 2 か月分以上あるときだけ出す。
+    /// メニューは年ごとにまとめ、月を選ぶとその月の最初の写真までスクロールする。
+    fn render_month_jump(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let months = self.past_months();
+        if months.len() < 2 {
+            return None;
+        }
+        let entity = cx.entity().downgrade();
+        let month_item = move |month: &str| {
+            let (year, number) = (month[..4].parse().unwrap_or(0), month[4..].parse().unwrap_or(1));
+            let entity = entity.clone();
+            let month = month.to_string();
+            PopupMenuItem::new(i18n::format_month(year, number)).on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| this.jump_to_month(&month, cx)).ok();
+            })
+        };
+        // 年ごとにまとめる（1 年分しか無ければ、月をそのまま並べる）
+        let mut years: Vec<(String, Vec<String>)> = Vec::new();
+        for month in months {
+            match years.last_mut() {
+                Some((year, list)) if month.starts_with(year.as_str()) => list.push(month),
+                _ => years.push((month[..4].to_string(), vec![month])),
+            }
+        }
+        Some(
+            Button::new("jump-to-month")
+                .small()
+                .ghost()
+                .icon(IconName::Calendar)
+                .label(tr!("past.jump"))
+                .dropdown_menu(move |mut menu, window, cx| {
+                    if let [(_, list)] = years.as_slice() {
+                        for month in list {
+                            menu = menu.item(month_item(month));
+                        }
+                        return menu;
+                    }
+                    for (year, list) in &years {
+                        let (list, month_item) = (list.clone(), month_item.clone());
+                        menu = menu.submenu(i18n::format_year(year), window, cx, move |mut sub, _, _| {
+                            for month in &list {
+                                sub = sub.item(month_item(month));
+                            }
+                            sub
+                        });
+                    }
+                    menu.scrollable(true).max_h(px(360.))
+                }),
+        )
     }
 
     /// 検索中に一覧の上に出す帯（色見本と、検索を閉じるボタン）。
@@ -2159,7 +2608,7 @@ impl Render for Dashboard {
         }
         let radii = window_corner_radii(window, cx);
         // ダイアログを開いている間は、窓の形（角の丸み）に合わせて後ろを暗くする
-        let scrim = window.has_active_dialog(cx).then(|| {
+        let scrim = (window.has_active_dialog(cx) || window.has_active_sheet(cx)).then(|| {
             div()
                 .absolute()
                 .inset_0()
@@ -2191,6 +2640,12 @@ impl Render for Dashboard {
             }))
             .on_action(cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)))
             .on_action(|_: &ToggleFullscreen, window, _| window.toggle_fullscreen())
+            .on_action(cx.listener(|this, _: &ShowInfo, window, cx| this.open_info(window, cx)))
+            .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
+                if let Some(key) = this.shown.clone() {
+                    this.confirm_delete(&key, window, cx);
+                }
+            }))
             .font_family(theme::FONT)
             .rounded_tl(radii.top_left)
             .rounded_tr(radii.top_right)
@@ -2272,25 +2727,89 @@ impl Render for Dashboard {
     }
 }
 
-/// `--apply [--mkt ja-JP]`: GUI を開かずに今日の写真を壁紙にする（cron / systemd timer 用）。
-fn run_cli(args: &[String]) -> anyhow::Result<()> {
-    let mkt = args
+/// ネットワークがまだつながっていないとき（ログイン直後など）に備えて、間を置いてやり直す。
+fn with_retry<T>(mut run: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    const WAITS: [u64; 3] = [5, 15, 30];
+    let mut attempt = 0;
+    loop {
+        match run() {
+            Ok(value) => return Ok(value),
+            Err(err) if attempt < WAITS.len() => {
+                eprintln!("{}: {err:#}", tr!("cli.retrying", seconds = WAITS[attempt]));
+                std::thread::sleep(Duration::from_secs(WAITS[attempt]));
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// 0 以上 `n` 未満の無作為な数（乱数のライブラリを足さず、標準ライブラリの無作為なハッシュの種を使う）。
+fn random_below(n: usize) -> usize {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    (hasher.finish() % n.max(1) as u64) as usize
+}
+
+/// `--apply --random [--favorites]` で壁紙にする写真の候補。今の壁紙は、ほかに候補があれば外す。
+fn random_candidates(stored: Vec<StoredImage>, favorites: bool, current: Option<&str>) -> Vec<StoredImage> {
+    let pool: Vec<StoredImage> = stored.into_iter().filter(|s| !favorites || s.favorite).collect();
+    let others: Vec<StoredImage> = pool
         .iter()
-        .position(|a| a == "--mkt")
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str)
-        .unwrap_or(MARKETS[0].0);
+        .filter(|s| current.is_none_or(|file| s.image_file.as_deref() != Some(file)))
+        .cloned()
+        .collect();
+    if others.is_empty() { pool } else { others }
+}
+
+/// `--apply`: GUI を開かずに壁紙を変える（systemd timer 用）。
+/// - `--mkt ja-JP`: 今日の写真の地域
+/// - `--if-new`: 前回の自動更新と同じ写真なら何もしない
+/// - `--random [--favorites]`: 保存した写真（お気に入り）から無作為に選ぶ
+fn run_cli(args: &[String]) -> anyhow::Result<()> {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
     let config = Config::load();
     let library = Library::new(config.save_dir());
-    let image = bing::fetch_archive(mkt, 0, 1)?
+
+    if has("--random") {
+        let favorites = has("--favorites");
+        // 今の壁紙のファイル名（保存先からの相対パス）
+        let prefix = format!("{}/", wallpaper::file_uri(library.dir()));
+        let current_uri = wallpaper::current_uri();
+        let current = current_uri.as_deref().and_then(|uri| uri.strip_prefix(prefix.as_str()));
+        let candidates = random_candidates(library.load_all(), favorites, current);
+        if candidates.is_empty() {
+            anyhow::bail!(if favorites { tr!("cli.no_favorites") } else { tr!("cli.no_photos") });
+        }
+        let image = &candidates[random_below(candidates.len())];
+        // 古い写真は、ここで壁紙用の画像をダウンロードする
+        let (_, path) = with_retry(|| library.ensure_image(image))?;
+        wallpaper::set_wallpaper(&path, config.fit)?;
+        println!("{} {}", bing::date_text(&image.startdate, true), image.display_title());
+        println!("{}: {}", tr!("cli.wallpaper_set"), path.display());
+        return Ok(());
+    }
+
+    let mkt = match args.iter().position(|a| a == "--mkt").and_then(|i| args.get(i + 1)) {
+        Some(code) => code.as_str(),
+        None => config.auto_market(),
+    };
+    let image = with_retry(|| bing::fetch_archive(mkt, 0, 1))?
         .into_iter()
         .next()
         .expect("fetch_archive returns at least one image");
-    let stored = library.store(&PhotoSource::from_bing(&image, mkt), &[mkt], true)?;
+    let key = image.key();
+    if has("--if-new") && config::State::load().last_auto.as_deref() == Some(key.as_str()) {
+        println!("{}: {}", tr!("cli.already_applied"), image.display_title());
+        return Ok(());
+    }
+    let stored = with_retry(|| library.store(&PhotoSource::from_bing(&image, mkt), &[mkt], true))?;
     let path = library
         .image_path(&stored)
         .ok_or_else(|| anyhow::anyhow!(tr!("error.saved_image_missing")))?;
     wallpaper::set_wallpaper(&path, config.fit)?;
+    config::State::update(|state| state.last_auto = Some(key))?;
     println!("{} {}", bing::date_text(&image.startdate, true), image.copyright);
     println!("{}: {}", tr!("cli.wallpaper_set"), path.display());
     Ok(())
@@ -2321,24 +2840,57 @@ fn main() {
         return;
     }
 
+    // すでに起動していたら、そのウィンドウを前に出してもらって終了する
+    let wake = match single::acquire() {
+        single::Instance::AlreadyRunning => return,
+        single::Instance::First(wake) => wake,
+    };
+
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
-        .run(|cx| {
+        .run(move |cx| {
             gpui_kit::init(cx);
             cx.bind_keys(key_bindings());
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::centered(size(px(1280.), px(900.)), cx)),
+                // 前回の大きさで開く（初回は 1280x900）
+                window_bounds: Some(WindowBounds::centered(
+                    match config::State::load().window {
+                        Some((w, h)) => size(px(w.max(820.)), px(h.max(560.))),
+                        None => size(px(1280.), px(900.)),
+                    },
+                    cx,
+                )),
                 window_min_size: Some(size(px(820.), px(560.))),
                 app_id: Some("bing-wallpaper-manager".into()),
                 // 枠はこのアプリが描く（角を丸くし、タイトルバーを大きな写真に重ねるため）
                 window_decorations: Some(WindowDecorations::Client),
                 ..gpui_kit::component::TitleBar::window_options()
             };
-            gpui_kit::open_window(options, cx, |window, cx| {
+            let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
                 theme::apply(window, cx);
                 cx.new(|cx| Dashboard::new(window, cx))
             })
             .expect("failed to open window");
             cx.activate(true);
+            // もう一度起動されたら、新しいウィンドウを開かずに、このウィンドウを前に出す
+            if let Some(wake) = wake {
+                cx.spawn(async move |cx| {
+                    loop {
+                        cx.background_executor().timer(Duration::from_millis(300)).await;
+                        if wake.try_iter().count() == 0 {
+                            continue;
+                        }
+                        let shown = cx.update(|cx| {
+                            cx.activate(true);
+                            window.update(cx, |_, window, _| window.activate_window()).is_ok()
+                        });
+                        // ウィンドウを閉じたあとは、待ち受けをやめる
+                        if !shown {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
         });
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 仮想の Wayland ディスプレイ（sway headless）でアプリを起動し、スクリーンショットを撮る。
 # 今のデスクトップ・設定・保存先・壁紙には触れない（gsettings はメモリ上の仮の保存先を使う）。
+# 自動更新の設定を変えても、実際の systemd のタイマーは作らない（BWM_NO_SYSTEMD=1）。
 #
 # 使い方: scripts/screenshot.sh [出力PNG] [待機秒数] [幅x高さ]
 #   環境変数 BWM_THEME=light|dark で配色を固定できる
@@ -79,6 +80,7 @@ env -u DISPLAY \
     WAYLAND_DISPLAY="$SOCK" \
     XDG_CONFIG_HOME="$FIXTURE/config" \
     GSETTINGS_BACKEND=memory \
+    BWM_NO_SYSTEMD=1 \
     VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
     "$BIN" >"$FIXTURE/app.log" 2>&1 &
 APP_PID=$!

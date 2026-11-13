@@ -104,6 +104,9 @@ impl Language {
     pub fn content_markets(self) -> &'static [&'static str] {
         match self {
             Language::Ja => &["ja-JP"],
+            Language::Es => &["es-ES", "en-US", "en-GB"],
+            Language::It => &["it-IT", "en-US", "en-GB"],
+            Language::Pt => &["pt-BR", "en-US", "en-GB"],
             Language::De => &["de-DE"],
             Language::Fr => &["fr-FR"],
             Language::ZhHans => &["zh-CN"],
@@ -216,6 +219,53 @@ pub fn format_date(y: i32, m: u32, d: u32, weekday: usize, with_year: bool) -> S
             let mo = ["янв.", "февр.", "мар.", "апр.", "мая", "июн.", "июл.", "авг.", "сент.", "окт.", "нояб.", "дек."][mi];
             if with_year { format!("{w}, {d} {mo} {y} г.") } else { format!("{w}, {d} {mo}") }
         }
+    }
+}
+
+/// 年月（「年月へ移動」のメニュー用）。例: `2026年11月`、`November 2026`。
+pub fn format_month(y: i32, m: u32) -> String {
+    let mi = (m.clamp(1, 12) - 1) as usize;
+    let name = |names: [&'static str; 12]| names[mi];
+    match current() {
+        Language::Ja | Language::Auto | Language::ZhHans | Language::ZhHant => format!("{y}年{m}月"),
+        Language::Ko => format!("{y}년 {m}월"),
+        Language::En => format!(
+            "{} {y}",
+            name(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
+        ),
+        Language::De => format!(
+            "{} {y}",
+            name(["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"])
+        ),
+        Language::Fr => format!(
+            "{} {y}",
+            name(["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"])
+        ),
+        Language::Es => format!(
+            "{} de {y}",
+            name(["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"])
+        ),
+        Language::It => format!(
+            "{} {y}",
+            name(["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"])
+        ),
+        Language::Pt => format!(
+            "{} de {y}",
+            name(["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"])
+        ),
+        Language::Ru => format!(
+            "{} {y}",
+            name(["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"])
+        ),
+    }
+}
+
+/// 年（「年月へ移動」のメニューの見出し用）。例: `2026年`、`2026`。
+pub fn format_year(year: &str) -> String {
+    match current() {
+        Language::Ja | Language::Auto | Language::ZhHans | Language::ZhHant => format!("{year}年"),
+        Language::Ko => format!("{year}년"),
+        _ => year.to_string(),
     }
 }
 

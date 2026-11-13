@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
-use crate::bing::{self, MARKETS};
+use crate::bing;
 use crate::library::PhotoSource;
 
 pub const SOURCE_NAME: &str = "Bing-Wallpaper-Archive";
@@ -68,6 +68,7 @@ fn to_source(entry: Entry, market: &str) -> Option<PhotoSource> {
             urlbase: urlbase.clone(),
             copyright: String::new(),
             title: String::new(),
+            copyrightlink: String::new(),
         }
         .key()
     };
@@ -84,6 +85,7 @@ fn to_source(entry: Entry, market: &str) -> Option<PhotoSource> {
             .unwrap_or_default(),
         urlbase,
         mirror_url: entry.url,
+        links: Vec::new(),
     })
 }
 
@@ -109,10 +111,10 @@ fn fetch_market(market: &str) -> Result<Vec<PhotoSource>> {
 
 /// 全地域の一覧を取得し、同じ写真をまとめて新しい順に返す。
 /// 取得できなかった地域はエラーとして返し、取得できた分だけで続ける。
-pub fn fetch_all() -> (Vec<ArchivePhoto>, Vec<anyhow::Error>) {
-    let handles: Vec<_> = MARKETS
+pub fn fetch_all(markets: &[&'static str]) -> (Vec<ArchivePhoto>, Vec<anyhow::Error>) {
+    let handles: Vec<_> = markets
         .iter()
-        .map(|(code, _, _)| std::thread::spawn(move || (*code, fetch_market(code))))
+        .map(|&code| std::thread::spawn(move || (code, fetch_market(code))))
         .collect();
 
     let mut photos: Vec<ArchivePhoto> = Vec::new();
