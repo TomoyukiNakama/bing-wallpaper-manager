@@ -83,10 +83,14 @@ fn keycode(name: &str) -> Option<u32> {
         "escape" => 1,
         "enter" => 28,
         "f5" => 63,
+        "home" => 102,
         "up" => 103,
+        "pageup" => 104,
         "left" => 105,
         "right" => 106,
+        "end" => 107,
         "down" => 108,
+        "pagedown" => 109,
         _ => return None,
     })
 }

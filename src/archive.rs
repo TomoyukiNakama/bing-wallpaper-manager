@@ -149,9 +149,84 @@ pub fn fetch_all(markets: &[&'static str]) -> (Vec<ArchivePhoto>, Vec<anyhow::Er
     (photos, errors)
 }
 
+/// 「古い写真を読み込む」1 回分を選ぶ。`archive` は新しい順。
+///
+/// いちばん古い保管済みの写真（`oldest`）より前を `days` 日分と、それより新しい側の抜けを `gap_limit` 枚まで。
+/// 抜けだけを先に埋めると一覧の途中にしか写真が増えず、止まったように見えるので、必ず古い方へも進める。
+pub fn older_batch(
+    archive: &[ArchivePhoto],
+    skip: &std::collections::HashSet<String>,
+    oldest: Option<&str>,
+    days: usize,
+    gap_limit: usize,
+) -> Vec<ArchivePhoto> {
+    let missing = || archive.iter().filter(|p| !skip.contains(&p.source.key));
+    let is_older = |p: &&ArchivePhoto| oldest.is_none_or(|o| p.source.startdate.as_str() < o);
+
+    let mut dates: Vec<&str> = Vec::new();
+    let mut batch: Vec<ArchivePhoto> = missing()
+        .filter(is_older)
+        .take_while(|p| {
+            let date = p.source.startdate.as_str();
+            if dates.last() != Some(&date) {
+                dates.push(date);
+            }
+            dates.len() <= days
+        })
+        .cloned()
+        .collect();
+    batch.extend(missing().filter(|p| !is_older(p)).take(gap_limit).cloned());
+    batch
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn photo(key: &str, date: &str) -> ArchivePhoto {
+        ArchivePhoto {
+            source: PhotoSource {
+                key: key.into(),
+                startdate: date.into(),
+                title: String::new(),
+                copyright: String::new(),
+                localized: Vec::new(),
+                descriptions: Vec::new(),
+                urlbase: String::new(),
+                mirror_url: None,
+                links: Vec::new(),
+            },
+            markets: vec!["en-US"],
+        }
+    }
+
+    #[test]
+    fn older_batch_moves_past_the_oldest_photo_even_with_gaps() {
+        let archive = vec![
+            photo("gap1", "20241105"),
+            photo("have", "20241104"),
+            photo("gap2", "20241103"),
+            photo("gap3", "20241102"),
+            photo("old1", "20240804"),
+            photo("old2", "20240803"),
+            photo("old2b", "20240803"),
+            photo("old3", "20240802"),
+        ];
+        let skip = ["have".to_string()].into_iter().collect();
+        let keys = |batch: Vec<ArchivePhoto>| batch.into_iter().map(|p| p.source.key).collect::<Vec<_>>();
+
+        // 古い方へ 2 日分進み、抜けは 2 枚まで
+        let batch = older_batch(&archive, &skip, Some("20240805"), 2, 2);
+        assert_eq!(keys(batch), ["old1", "old2", "old2b", "gap1", "gap2"]);
+
+        // 何も保管していなければ、新しい方から
+        let batch = older_batch(&archive, &skip, None, 2, 2);
+        assert_eq!(keys(batch), ["gap1", "gap2"]);
+
+        // 古い写真が尽きても、抜けが残っていれば読み込む
+        let batch = older_batch(&archive, &skip, Some("20240101"), 2, 3);
+        assert_eq!(keys(batch), ["gap1", "gap2", "gap3"]);
+    }
 
     #[test]
     fn converts_entry_with_bing_url() {

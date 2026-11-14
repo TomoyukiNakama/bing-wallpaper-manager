@@ -41,7 +41,7 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
    ```sh
    ACTIONS=$'scroll down 8 700 800\nclick 880 830\nshot target/step1.png' scripts/screenshot.sh target/step2.png 10 1280x1000
    ```
-   使える操作は `click X Y` / `rclick X Y` / `drag X1 Y1 X2 Y2` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|ctrl-f` /
+   使える操作は `click X Y` / `rclick X Y` / `drag X1 Y1 X2 Y2` / `scroll down|up N X Y` / `key left|right|enter|escape|f5|home|end|pageup|pagedown|ctrl-f` /
    `type 英小文字・数字・空白` / `sleep 秒` / `shot PATH`。
    撮影中の gsettings はメモリ上の仮の保存先（`GSETTINGS_BACKEND=memory`）なので、「壁紙にする」を押しても実際の壁紙は変わらない。
    自動更新のスイッチを入れても、実際の systemd のタイマーは作らない（`BWM_NO_SYSTEMD=1`。ファイルは撮影用の設定フォルダに書かれる）。
@@ -65,6 +65,9 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
   `src/info.rs` 写真の情報のパネル / `src/schedule.rs` 自動更新（systemd のユーザータイマー） / `src/single.rs` 二重起動の防止
 - 地域は `bing::MARKETS`（Bing が地域ごとの写真を配信しているものだけ）から設定で選ぶ。ダッシュボードは `Dashboard::markets`
   （選んだ地域）を使い、`MARKETS` を直接回さない。地域を足すときは `region.xx_yy` の訳も全言語に足す。
+- 古い写真の読み込み（`load_older`）は、いちばん古い写真より前の約 1 か月分と、途中の抜け（地域を足したあとなど）を読み込む
+  （`archive::older_batch`。抜けだけを埋めると一覧の最後が進まず、止まったように見える）。
+  ボタンで読み込むか、最後までスクロールしたら自動で読み込むかは設定（`config::OlderMode`）で選ぶ。
 - 削除した写真のキーは `.bing-wallpaper/deleted.txt` に覚え、更新や古い写真の読み込みで取得し直さない（今日の写真として配信されたら戻す）。
 - 解説文は、最近の写真は Bing のホームページの API（`bing::fetch_descriptions`）、古い写真はアーカイブから補う。
 - ウィンドウの大きさなど、設定ではない状態は `state.json`（`config::State`）に置く。大きさは影を除いて覚える

@@ -36,7 +36,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use bing::BingImage;
-use config::{AutoUpdate, Config, FitMode, Language, ThemePref};
+use config::{AutoUpdate, Config, FitMode, Language, OlderMode, ThemePref};
 use archive::ArchivePhoto;
 use library::{Library, PhotoSource, StoredImage};
 use colors::ColorBucket;
@@ -57,7 +57,11 @@ gpui_kit::actions!(
         ToggleFavorite,
         ToggleFullscreen,
         ShowInfo,
-        DeleteSelected
+        DeleteSelected,
+        ScrollHome,
+        ScrollEnd,
+        ScrollPageUp,
+        ScrollPageDown
     ]
 );
 
@@ -77,6 +81,10 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("f11", ToggleFullscreen, ctx),
         KeyBinding::new("ctrl-i", ShowInfo, ctx),
         KeyBinding::new("delete", DeleteSelected, ctx),
+        KeyBinding::new("home", ScrollHome, ctx),
+        KeyBinding::new("end", ScrollEnd, ctx),
+        KeyBinding::new("pageup", ScrollPageUp, ctx),
+        KeyBinding::new("pagedown", ScrollPageDown, ctx),
     ]
 }
 
@@ -108,6 +116,8 @@ enum ListItem {
 const AUTO_REFRESH: Duration = Duration::from_secs(60 * 60);
 /// 「さらに古い写真を読み込む」で一度に読み込む日数。
 const OLDER_DAYS: usize = 30;
+/// 「古い写真を読み込む」1 回で、途中の抜けを埋める写真の上限。
+const GAP_PHOTOS: usize = 90;
 /// フッターの高さ（大きな写真の高さの計算用）。タイトルバーは大きな写真に重ねるので含めない。
 const CHROME_HEIGHT: Pixels = px(30.);
 /// 大きな写真に重ねるタイトルバーの高さと、表示・非表示を切り替える時間。
@@ -202,6 +212,8 @@ struct Dashboard {
     loading_older: bool,
     /// アーカイブにもこれより古い写真が無い
     older_exhausted: bool,
+    /// 前回の読み込みが失敗した。自動では繰り返さず、ボタンを出してやり直せるようにする。
+    older_failed: bool,
     /// 中サイズの画像を取得中（または取得を試みた）写真
     previews_pending: HashSet<String>,
     focus_handle: FocusHandle,
@@ -351,6 +363,7 @@ impl Dashboard {
             archive: None,
             loading_older: false,
             older_exhausted: false,
+            older_failed: false,
             previews_pending: HashSet::new(),
             search_input,
             query: Query::default(),
@@ -754,7 +767,7 @@ impl Dashboard {
         .detach();
     }
 
-    /// アーカイブから、まだ保管していない写真を新しい方から約 1 か月分読み込む。
+    /// アーカイブから、いちばん古い写真より前の約 1 か月分を読み込む。途中の抜けも少しずつ埋める。
     /// サムネイルだけを保管し、壁紙用の画像は「壁紙にする」ときに取得する。
     fn load_older(&mut self, cx: &mut Context<Self>) {
         if self.loading_older || self.older_exhausted {
@@ -771,6 +784,7 @@ impl Dashboard {
         let stored_keys: HashSet<String> =
             self.stored.iter().map(|s| s.key.clone()).chain(self.deleted.iter().cloned()).collect();
         let markets = self.markets.clone();
+        let oldest = self.stored.iter().map(|s| s.startdate.clone()).min();
         cx.spawn(async move |this, cx| {
             let archive = match cached {
                 Some(archive) => archive,
@@ -787,6 +801,7 @@ impl Dashboard {
                         };
                         this.update(cx, |this, cx| {
                             this.loading_older = false;
+                            this.older_failed = true;
                             this.set_status(message, true);
                             cx.notify();
                         })
@@ -799,21 +814,8 @@ impl Dashboard {
                 }
             };
 
-            // まだ保管していない写真を、新しい日付から OLDER_DAYS 日分
-            // （日付ではなく写真で判定するので、途中に抜けがあっても埋まる）
-            let mut dates: Vec<&str> = Vec::new();
-            let batch: Vec<ArchivePhoto> = archive
-                .iter()
-                .filter(|p| !stored_keys.contains(&p.source.key))
-                .take_while(|p| {
-                    let date = p.source.startdate.as_str();
-                    if dates.last() != Some(&date) {
-                        dates.push(date);
-                    }
-                    dates.len() <= OLDER_DAYS
-                })
-                .cloned()
-                .collect();
+            // いちばん古い写真より前の OLDER_DAYS 日分と、途中の抜け（地域を足したときなど）を読み込む
+            let batch = archive::older_batch(&archive, &stored_keys, oldest.as_deref(), OLDER_DAYS, GAP_PHOTOS);
 
             if batch.is_empty() {
                 this.update(cx, |this, cx| {
@@ -827,11 +829,14 @@ impl Dashboard {
             }
 
             let total = batch.len();
+            // 抜けを埋めた分も混ざるので、範囲は日付の最小と最大で示す
+            let first = batch.iter().map(|p| p.source.startdate.as_str()).min().unwrap_or_default();
+            let last = batch.iter().map(|p| p.source.startdate.as_str()).max().unwrap_or_default();
             let range = format!(
                 "{}{}{}",
-                bing::date_text(&batch[total - 1].source.startdate, true),
+                bing::date_text(first, true),
                 tr!("list.range_separator"),
-                bing::date_text(&batch[0].source.startdate, true)
+                bing::date_text(last, true)
             );
             let mut loaded = 0;
             for (n, photo) in batch.into_iter().enumerate() {
@@ -865,7 +870,10 @@ impl Dashboard {
 
             this.update(cx, |this, cx| {
                 this.loading_older = false;
+                this.older_failed = loaded == 0;
                 this.analyze_missing_colors(cx);
+                // 途中の抜けだけが埋まって最後が見えたままなら、続けて読み込む
+                this.auto_load_older_soon(cx);
                 if loaded == 0 {
                     this.set_status(
                         tr!("status.older_failed"),
@@ -880,6 +888,44 @@ impl Dashboard {
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    /// 古い写真の読み込み方（ボタン／最後までスクロールしたら自動）を変える。
+    fn set_older_mode(&mut self, mode: OlderMode, cx: &mut Context<Self>) {
+        if self.config.older == mode {
+            return;
+        }
+        self.config.older = mode;
+        self.save_config(cx);
+        self.auto_load_older_soon(cx);
+        cx.notify();
+    }
+
+    /// 自動で読み込む設定のとき、一覧の最後（読み込みの案内の行）が見えていたら古い写真を読み込む。
+    fn auto_load_older(&mut self, cx: &mut Context<Self>) {
+        if self.config.older != OlderMode::Auto || self.loading_older || self.older_exhausted || self.older_failed {
+            return;
+        }
+        // 検索結果の一覧には案内の行が無い
+        if !matches!(self.list_items.last(), Some(ListItem::LoadOlder)) {
+            return;
+        }
+        let last = self.list_items.len() - 1;
+        if self.list_state.item_is_below_viewport(last) == Some(false) {
+            self.load_older(cx);
+        }
+    }
+
+    /// キー操作などでスクロールした直後は一覧の配置がまだ古いので、描き直しを待ってから確かめる。
+    fn auto_load_older_soon(&mut self, cx: &mut Context<Self>) {
+        if self.config.older != OlderMode::Auto {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            this.update(cx, |this, cx| this.auto_load_older(cx)).ok();
         })
         .detach();
     }
@@ -921,6 +967,7 @@ impl Dashboard {
     /// 進行中の取得をやめて、最初からやり直せるようにする（保存先や地域を変えたとき）。
     fn restart_loading(&mut self) {
         self.older_exhausted = false;
+        self.older_failed = false;
         self.loading_older = false;
         self.generation += 1;
         self.refreshing = false;
@@ -1117,6 +1164,29 @@ impl Dashboard {
         }
     }
 
+    /// Home / End: 一覧の最初・最後までスクロールする。
+    fn scroll_to_edge(&mut self, end: bool, cx: &mut Context<Self>) {
+        if end {
+            self.list_state.scroll_to_end();
+        } else {
+            self.list_state.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) });
+        }
+        // 最初に戻ったら大きな写真を広げ、最後へ行ったら細い帯にする（ホイールで動かしたときと同じ）
+        self.hero_collapsed = end && self.list_state.item_count() > 1;
+        self.auto_load_older_soon(cx);
+        cx.notify();
+    }
+
+    /// PageUp / PageDown: 一覧を 1 画面分（少し重ねて）スクロールする。
+    fn scroll_page(&mut self, direction: f32, cx: &mut Context<Self>) {
+        // まだ高さを測っていない行を飛び越さないよう、先読みの範囲（800px）より短くする
+        let page = (self.list_state.viewport_bounds().size.height * 0.9).clamp(px(200.), px(720.));
+        self.list_state.scroll_by(page * direction);
+        self.on_list_scrolled(cx);
+        self.auto_load_older_soon(cx);
+        cx.notify();
+    }
+
     /// 一覧を、その年月の最初の写真までスクロールする（`month` は `202611` の形）。
     fn jump_to_month(&mut self, month: &str, cx: &mut Context<Self>) {
         let ix = self.list_items.iter().position(|item| match item {
@@ -1166,6 +1236,7 @@ impl Dashboard {
 
     /// 一覧のスクロール位置に合わせて、大きな写真を細い帯にする（一番上に戻ったら広げる）。
     fn on_list_scrolled(&mut self, cx: &mut Context<Self>) {
+        self.auto_load_older(cx);
         // 高さが変わっている最中は切り替えない（一覧の大きさが変わり、位置の判定が揺れるため）
         if self.hero_height_changed.is_some_and(|t| t.elapsed() < HERO_RESIZE) {
             return;
@@ -2351,29 +2422,45 @@ impl Dashboard {
                 let tiles: Vec<AnyElement> = keys.iter().map(|k| self.stored_tile(k, true, p, cx)).collect();
                 (h_flex().gap_4().children(tiles).into_any_element(), 20.)
             }
-            ListItem::LoadOlder => (
-                // 保存済みの写真のあとに、まだダウンロードしていない古い写真を読み込むボタン
-                v_flex()
+            ListItem::LoadOlder => {
+                // 保存済みの写真のあとに、まだダウンロードしていない古い写真を読み込む案内。
+                // 自動で読み込む設定では、ボタンは失敗したあとのやり直しにだけ出す。
+                let auto = self.config.older == OlderMode::Auto;
+                let note = if self.older_exhausted {
+                    tr!("past.no_older").to_string()
+                } else if auto {
+                    tr!("past.auto_note", source = archive::SOURCE_NAME).to_string()
+                } else {
+                    tr!("past.load_older_note", source = archive::SOURCE_NAME).to_string()
+                };
+                let body = v_flex()
                     .gap_2()
                     .items_start()
-                    .child(
-                        Button::new("load-older")
-                            .small()
-                            .label(tr!("past.load_older"))
-                            .loading(self.loading_older)
-                            .disabled(self.loading_older || self.older_exhausted)
-                            .on_click(cx.listener(|this, _, _, cx| this.load_older(cx))),
-                    )
-                    .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(
-                        if self.older_exhausted {
-                            tr!("past.no_older").to_string()
-                        } else {
-                            tr!("past.load_older_note", source = archive::SOURCE_NAME)
-                        },
-                    ))
-                    .into_any_element(),
-                28.,
-            ),
+                    .when(!auto || self.older_failed, |el| {
+                        el.child(
+                            Button::new("load-older")
+                                .small()
+                                .label(tr!("past.load_older"))
+                                .loading(self.loading_older)
+                                .disabled(self.loading_older || self.older_exhausted)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.older_failed = false;
+                                    this.load_older(cx)
+                                })),
+                        )
+                    })
+                    .when(auto && self.loading_older && !self.older_failed, |el| {
+                        el.child(
+                            h_flex()
+                                .gap_2()
+                                .child(Spinner::new().small())
+                                .child(div().text_sm().text_color(p.ink).child(tr!("past.auto_loading"))),
+                        )
+                    })
+                    .child(div().text_xs().line_height(px(18.)).text_color(p.slate).child(note))
+                    .into_any_element();
+                (body, 28.)
+            }
         };
         div()
             .px_8()
@@ -2641,6 +2728,10 @@ impl Render for Dashboard {
             .on_action(cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)))
             .on_action(|_: &ToggleFullscreen, window, _| window.toggle_fullscreen())
             .on_action(cx.listener(|this, _: &ShowInfo, window, cx| this.open_info(window, cx)))
+            .on_action(cx.listener(|this, _: &ScrollHome, _, cx| this.scroll_to_edge(false, cx)))
+            .on_action(cx.listener(|this, _: &ScrollEnd, _, cx| this.scroll_to_edge(true, cx)))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| this.scroll_page(-1., cx)))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| this.scroll_page(1., cx)))
             .on_action(cx.listener(|this, _: &DeleteSelected, window, cx| {
                 if let Some(key) = this.shown.clone() {
                     this.confirm_delete(&key, window, cx);

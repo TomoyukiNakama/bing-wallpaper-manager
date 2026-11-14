@@ -20,7 +20,7 @@ use gpui_kit::*;
 
 use crate::Dashboard;
 use crate::bing::{self, MARKETS};
-use crate::config::{AutoMode, AutoUpdate, FitMode, Interval, Language, ThemePref};
+use crate::config::{AutoMode, AutoUpdate, FitMode, Interval, Language, OlderMode, ThemePref};
 use crate::theme::Palette;
 
 /// プレビューの枠の幅。
@@ -237,6 +237,13 @@ impl SettingsView {
     fn render_general(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let config = &self.dashboard.read(cx).config;
         let theme = config.theme;
+        let older = config.older;
+        let set_older = {
+            let dashboard = self.dashboard.clone();
+            move |ix: &usize, _: &mut Window, cx: &mut App| {
+                dashboard.update(cx, |this, cx| this.set_older_mode(OlderMode::ALL[*ix], cx));
+            }
+        };
         let set_theme = {
             let dashboard = self.dashboard.clone();
             move |ix: &usize, window: &mut Window, cx: &mut App| {
@@ -259,6 +266,15 @@ impl SettingsView {
                     .selected_index(ThemePref::ALL.iter().position(|t| *t == theme))
                     .children(ThemePref::ALL.iter().enumerate().map(|(i, t)| Radio::new(("theme", i)).label(t.label())))
                     .on_change(set_theme),
+                p,
+            ))
+            .child(Self::field(
+                tr!("settings.older"),
+                tr!("settings.older_desc", source = crate::archive::SOURCE_NAME),
+                RadioGroup::vertical("older")
+                    .selected_index(OlderMode::ALL.iter().position(|m| *m == older))
+                    .children(OlderMode::ALL.iter().enumerate().map(|(i, m)| Radio::new(("older", i)).label(m.label())))
+                    .on_change(set_older),
                 p,
             ))
     }

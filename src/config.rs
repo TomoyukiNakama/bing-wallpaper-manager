@@ -30,6 +30,31 @@ pub struct Config {
     /// 壁紙の自動更新。
     #[serde(default)]
     pub auto: AutoUpdate,
+    /// 古い写真の読み込み方。
+    #[serde(default)]
+    pub older: OlderMode,
+}
+
+/// 一覧の最後より古い写真を、いつ読み込むか。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OlderMode {
+    /// 一覧の最後のボタンを押したとき
+    #[default]
+    Button,
+    /// 一覧の最後までスクロールしたとき
+    Auto,
+}
+
+impl OlderMode {
+    pub const ALL: [OlderMode; 2] = [OlderMode::Button, OlderMode::Auto];
+
+    pub fn label(self) -> String {
+        match self {
+            OlderMode::Button => tr!("older.button"),
+            OlderMode::Auto => tr!("older.auto"),
+        }
+    }
 }
 
 /// 壁紙の自動更新（systemd のユーザータイマーで `--apply` を実行する）。
