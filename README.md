@@ -2,7 +2,7 @@
 
 # Bing Wallpaper Manager
 
-**English** | [日本語](README.ja.md)
+**English** | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [한국어](README.ko.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Italiano](README.it.md) | [Português (Brasil)](README.pt-BR.md) | [Русский](README.ru.md)
 
 A desktop app for Ubuntu that lets you browse Bing’s daily photos and set them as your GNOME wallpaper. Built with Rust, [GPUI](https://gpui.rs) and [gpui-kit](https://gpui-kit.com).
 
@@ -28,7 +28,7 @@ The photo you pick fills the top of a rounded, frameless window. Hover over it t
 - **Go to month**: jump straight to a month of the earlier photos
 - **Delete** (Delete key): removes a photo from the folder after a confirmation; deleted photos are not downloaded again
 - **Automatic updates**: a switch in the settings changes the wallpaper for you even when the app is closed — to each new photo of the day, or to a different favorite or saved photo at an interval you pick
-- **Settings** (☰ at the top right, Ctrl+,): General (language, theme), Regions, Wallpaper (fit), Automatic updates, Storage (folder and disk usage), and About (version, license, libraries used)
+- **Settings** (☰ at the top right, Ctrl+,): General (language, theme, how older photos load), Regions, Wallpaper (fit), Automatic updates, Storage (folder and disk usage), and About (version, license, libraries used)
 - **11 languages**: Japanese, English, Chinese (Simplified / Traditional), Korean, German, French, Spanish, Italian, Portuguese and Russian. *Automatic* follows the OS language (`LANG`). Photo titles and descriptions prefer the version shown in a region that uses the selected language
 - **Theme**: match the system, light or dark
 - **Keyboard**: ← → to choose a photo, Enter to set it as the wallpaper, Ctrl+D to add or remove a favorite, Ctrl+I for photo info, Delete to delete, Home / End to jump to the newest or oldest photos, Page Up / Page Down to scroll a screen at a time, F5 / Ctrl+R to refresh, Ctrl+F to search, Ctrl+, for settings, F11 for full screen
@@ -75,21 +75,35 @@ Pick one of ten colors (red, orange, yellow, green, cyan, blue, purple, pink, wh
 
 ![Photos with a lot of blue](docs/search-color.jpg)
 
-## Wallpaper fit
+## Settings
 
-When the photo’s shape differs from your monitor, choose how it fits in **Settings** (☰ at the top right, or Ctrl+,) → **Wallpaper**. The preview uses your monitor’s proportions and the photo shown at the top; with *Show the whole photo*, the leftover space is filled with the background color GNOME uses. The current wallpaper updates right away.
+Open the settings with **☰** at the top right of the title bar, or press **Ctrl+,**. Changes take effect right away, and Escape closes the dialog. The pages are listed on the left.
 
-![Wallpaper settings previewing “Show the whole photo”](docs/settings-fit.jpg)
+### General
 
-## Regions
+- **Language**: the display language. *Automatic* follows the OS
+- **Theme**: match the system, light or dark
+- **Older photos**: how photos older than the end of the list are loaded from the community archive, about a month at a time
+  - *Load with a button*: press *Load older photos* at the end of the list
+  - *Load automatically at the end of the list*: scrolling to the end (or pressing End) loads the next month by itself. The button appears only if loading fails, so you can try again
 
-Bing shows different photos, titles and descriptions in different regions. In **Settings** → **Regions**, choose which regions the dashboard gets photos from: Japan, United States, United Kingdom, Germany, France and China are on by default, and Canada (English), Canada (French), India, Spain, Italy and Brazil can be added. At least one region stays on. Regions where Bing only shows its worldwide photo are not listed.
+![General settings: language, theme and how older photos load](docs/settings-general.jpg)
+
+### Regions
+
+Bing shows different photos, titles and descriptions in different regions. Choose which regions the dashboard gets photos from: Japan, United States, United Kingdom, Germany, France and China are on by default, and Canada (English), Canada (French), India, Spain, Italy and Brazil can be added. At least one region stays on. Regions where Bing only shows its worldwide photo are not listed.
 
 ![Region settings with a checkbox for each Bing region](docs/regions.jpg)
 
-## Automatic updates
+### Wallpaper
 
-Turn on **Settings** → **Automatic updates** to have the wallpaper change by itself, even when the app is closed. Choose what to use:
+When the photo’s shape differs from your monitor, choose how it fits: zoom to fill the screen, show the whole photo, stretch, center at original size, or span across monitors. The preview uses your monitor’s proportions and the photo shown at the top; with *Show the whole photo*, the leftover space is filled with the background color GNOME uses. The current wallpaper updates right away.
+
+![Wallpaper settings previewing “Show the whole photo”](docs/settings-fit.jpg)
+
+### Automatic updates
+
+Turn on the switch to have the wallpaper change by itself, even when the app is closed. Choose what to use:
 
 - **Today’s photo**: checks every hour (and shortly after you log in) and sets the new photo when one is published, for the region you pick. A wallpaper you choose yourself stays until the next photo arrives
 - **From favorites**: picks a different favorite each time, every 30 minutes, hour, 3 hours, 6 hours or day
@@ -98,6 +112,18 @@ Turn on **Settings** → **Automatic updates** to have the wallpaper change by i
 The switch creates a systemd user timer (`~/.config/systemd/user/bing-wallpaper-manager.timer` and `.service`) that runs this app with `--apply`, and turning it off removes the timer. The timer runs the app from where it is now, so turn the switch off and on again if you move the app.
 
 ![Automatic update settings with the switch turned on](docs/auto.jpg)
+
+### Storage
+
+Shows the folder where photos are kept, how much disk space they use and how many there are. *Change…* picks another folder, and *Open folder* opens it in the file manager. See [Files](#files) for what is stored there.
+
+![Storage settings with the folder and its disk usage](docs/settings-storage.jpg)
+
+### About
+
+The version, the license (MIT or Apache 2.0, with buttons to read each) and the list of libraries used. Click a library to open its page.
+
+![About page with the version, license and libraries used](docs/settings-about.jpg)
 
 ## Built with
 
@@ -184,7 +210,7 @@ This removes the app, icon and desktop entry. Your settings (`~/.config/bing-wal
 cargo run --release
 ```
 
-## Storage
+## Files
 
 Choose the storage folder under *Settings → Storage* (default: `~/Pictures/BingWallpaper`, or the localized Pictures folder). Settings are saved to `~/.config/bing-wallpaper-manager/config.json`, and things the app remembers (such as the window size) to `state.json` in the same folder.
 A photo is saved only once even if it is shown in several regions or on different days, and saved images are never downloaded again.
@@ -212,7 +238,7 @@ Without `--mkt`, the region chosen under *Automatic updates* is used (or the fir
 
 ### Update every day
 
-Use **Settings** → **Automatic updates** (see [Automatic updates](#automatic-updates)); it sets up the systemd user timer for you. To check on it:
+Turn on the switch under **Settings** → **Automatic updates** (see [Automatic updates](#automatic-updates)); it sets up the systemd user timer for you. To check on it:
 
 ```sh
 systemctl --user list-timers bing-wallpaper-manager.timer
@@ -245,7 +271,7 @@ ACTIONS=$'key ctrl-f\ntype penguin\nsleep 3\nshot target/step1.png' \
   scripts/screenshot.sh target/step2.png 10 1280x1000
 ```
 
-The images in `docs/` are taken this way with the dark theme (English for `README.md`, Japanese `*.ja.jpg` for `README.ja.md`) and saved as JPEG at quality 85, for example:
+The images in `docs/` are taken this way with the dark theme and saved as JPEG at quality 85. The main screenshot and the settings pages exist in every language (`docs/<name>.<language>.jpg`; English has no suffix); the other images are taken in English and Japanese, and the other languages’ READMEs use the English ones. For example:
 
 ```sh
 BG=target/screenshot-fixture/store/20261112_OHR.AbrahamCanada_UHD.jpg FLOAT=1280x840 BWM_LANG=en BWM_THEME=dark \
@@ -264,6 +290,7 @@ Strings live in `locales/<language>.yml` (`ja`, `en`, `zh-CN`, `zh-TW`, `ko`, `d
 - Write placeholders as `%{count}`
 - Every file must have the same keys (`cargo test` checks this). Missing translations fall back to English
 - To add a language, add a file under `locales/` and a variant to `Language` in `src/i18n.rs`
+- The README exists in every language (`README.md` in English, `README.<language>.md` for the others). When a feature changes, update all of them
 
 ### Layout
 
@@ -287,7 +314,7 @@ Strings live in `locales/<language>.yml` (`ja`, `en`, `zh-CN`, `zh-TW`, `ko`, `d
 | `src/third_party.tsv` / `THIRD_PARTY_LICENSES.md` | Libraries used (generated by `scripts/gen-third-party.py`) |
 | `assets/icons/` | App icon (SVG, and PNGs rendered by `scripts/render-icon.py`) |
 | `assets/bing-wallpaper-manager.desktop` | Desktop entry (installed by `scripts/install.sh`) |
-| `scripts/rustc-stable` | Picks the rustup stable rustc for cargo (see Build) |
+| `scripts/rustc-stable` | Picks the rustup stable rustc for cargo (see “2. Install Rust”) |
 | `scripts/screenshot.sh` | Screenshots on a virtual display |
 | `tools/vpointer/` | Virtual mouse and keyboard for screenshots (separate crate) |
 

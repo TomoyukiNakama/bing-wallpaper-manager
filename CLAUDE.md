@@ -96,11 +96,17 @@ Ubuntu 26.04（GNOME）向けの Bing 壁紙アプリ。Rust + gpui-kit。UI・�
 - `use gpui_kit::*` をしているファイルのテストでは `use super::*` をしない（gpui の `test` マクロが取り込まれ、`#[test]` がコンパイルできない）。
 - 依存を追加・更新したら `python3 scripts/gen-third-party.py` で使用ライブラリの一覧を作り直す。
 - アーカイブ（bing.npanuhin.me）は非公式。使えないときも公式 API の範囲だけで動くようにする。
-- README は英語版（`README.md`、GitHub の既定）と日本語版（`README.ja.md`）の 2 つ。機能を変えたら両方を同じ内容に更新する。
-  説明用の画像は `docs/` にあり、英語版は英語表示、日本語版は日本語表示（`*.ja.jpg`）で撮る（`BWM_LANG`、ダークテーマ）。
-  サイズを抑えるため、撮った PNG は品質 85 の JPEG にして置く。
-  README 用は `FLOAT=1280x840 BG=<表示中の写真の UHD 画像>` で、壁紙の上に浮かせたウィンドウとして 1440x980 で撮る
-  （手順は README の「Development」→「Screenshots」に例がある）。
+- README は対応している言語ごとにある（英語は `README.md`、ほかは `README.<言語>.md`。11 言語）。機能を変えたら、すべてを同じ内容に更新する。
+  英語版が元で、画面の文言（ボタンや設定の名前）は `locales/<言語>.yml` の訳と一致させる。
+  説明用の画像は `docs/` にあり、ダークテーマで撮る（`BWM_LANG`）。サイズを抑えるため、撮った PNG は品質 85 の JPEG にして置く。
+  - メイン画面と設定の 6 ページ（`screenshot`・`settings-general`・`regions`・`settings-fit`・`auto`・`settings-storage`・`settings-about`）は
+    全言語分ある（`docs/<名前>.<言語>.jpg`。英語は言語の部分なし）。
+  - ほかの画像（`browse`・`jump`・`delete`・`info`・`search-words`・`search-color`）は英語と日本語だけで、ほかの言語の README は英語の画像を使う。
+  - README 用は `FLOAT=1280x840 BG=<表示中の写真の UHD 画像>` で、壁紙の上に浮かせたウィンドウとして 1440x980 で撮る
+    （手順は README の「Development」→「Screenshots」に例がある）。
+  - 保存先のページにはフォルダのパスが写る。作業フォルダのパスを出さないよう、`STORE=/tmp/Pictures/BingWallpaper`（撮影用の保存先の複製）で撮る。
+  - 言語によって説明文の行数が変わり、設定のスイッチや選択肢の位置がずれる。撮ったら全言語を並べて確かめる。
+- `locales/*.yml` だけを変えてもビルドし直されないことがある。訳を変えたら `touch src/i18n.rs` してからビルドする。
 - アイコンは `assets/icons/bing-wallpaper-manager.svg` が元。変えたら `python3 scripts/render-icon.py` で PNG を作り直す。
   ウィンドウの app_id と `.desktop` のファイル名（`bing-wallpaper-manager`）は一致させる（GNOME がアイコンを結び付ける）。
 - 一覧は gpui の `list`（仮想リスト）で、見えている行だけを描く。写真を日付ごとにまとめて、ウィンドウ幅に収まる行（`ListItem`）に詰める。

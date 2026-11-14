@@ -140,7 +140,7 @@ search.no_results: "Nessuna foto corrisponde. Prova altre parole o un altro colo
 search.placeholder: "Cerca foto (parole, colori)"
 search.results: "Risultati (%{count})"
 settings.about: "Informazioni"
-settings.auto: "Aggiornamento automatico"
+settings.auto: "Auto-aggiornamento"
 settings.change_dir: "Cambia…"
 settings.fit: "Adattamento"
 settings.fit_applies_now: " Lo sfondo attuale si aggiorna subito."
